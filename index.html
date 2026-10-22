@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#274d43">
+  <title>2-4반 게시판 앙! · 학사일정</title>
+  <link rel="stylesheet" href="style.css">
+  <link rel="stylesheet" href="account.css">
+  <link rel="stylesheet" href="boards.css">
+  <link rel="stylesheet" href="chalkboard.css">
+  <script src="app.js" defer></script>
+  <script src="account.js" defer></script>
+  <script src="boards.js" defer></script>
+</head>
+<body>
+  <header class="site-header"><div class="header-inner"><button id="profile-nav" class="profile-nav" aria-label="내 프로필로 이동" title="내 프로필" hidden><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="8" r="3.5"/><path d="M5 21v-2a7 7 0 0 1 14 0v2"/></svg></button><a class="brand" href="index.html"><span class="brand-mark" aria-hidden="true">✳</span>2-4반 게시판 앙!</a><span class="class-badge">우리 반의 작은 공간</span></div></header>
+  <nav id="board-navigation" class="board-navigation" aria-label="게시판 메뉴" hidden><div><button data-board="home">처음 화면</button><button data-board="calendar">학사일정</button><button data-board="assignments">수행평가</button><button data-board="photos">학급앨범</button><button data-board="resources">수행평가 자료찾기</button></div></nav>
+  <main id="home-page" hidden>
+    <p class="chalk-kicker">OUR CLASSROOM · 2–4</p><h1>오늘도 반가워냥! <span>✳</span></h1><p class="home-intro">우리 반의 소식과 추억을 붙여 두는 곳.<br>어디부터 구경해 볼까냥?</p>
+    <div class="home-choices">
+      <button class="home-choice" data-home-board="calendar"><span class="choice-number">01</span><svg viewBox="0 0 100 110" fill="none" aria-hidden="true"><rect x="14" y="22" width="72" height="73" rx="4"/><path d="M14 42h72M32 13v19m36-19v19"/><g class="icon-dates"><path d="M29 56h7m12 0h7m12 0h7M29 69h7m12 0h7m12 0h7M29 82h7m12 0h7"/></g><circle cx="71" cy="82" r="7" class="icon-accent"/></svg><strong>학사일정</strong><span class="choice-description">우리의 한 달</span></button>
+      <button class="home-choice" data-home-board="assignments"><span class="choice-number">02</span><svg viewBox="0 0 100 110" fill="none" aria-hidden="true"><path d="M21 13h43l16 17v67H21zM63 13v18h17"/><path d="M44 48h23M44 65h23M44 82h16"/><path class="icon-accent" d="m28 47 4 4 6-8m-10 21 4 4 6-8m-10 21 4 4 6-8"/></svg><strong>수행평가</strong><span class="choice-description">차근차근 준비해요</span></button>
+      <button class="home-choice" data-home-board="photos"><span class="choice-number">03</span><svg viewBox="0 0 100 110" fill="none" aria-hidden="true"><path d="m20 15 67 7-8 78-67-7z"/><path d="m25 26 51 5-5 46-51-5z"/><circle cx="59" cy="44" r="6" class="icon-accent"/><path d="m22 62 17-16 13 14 8-6 12 15M33 85l26 3"/></svg><strong>학급앨범</strong><span class="choice-description">함께한 순간들</span></button>
+      <button class="home-choice" data-home-board="resources"><span class="choice-number">04</span><svg viewBox="0 0 100 110" fill="none" aria-hidden="true"><path d="M22 12h39l18 19v66H22zM61 12v20h18M34 45h32M34 56h32M34 67h18"/><circle cx="64" cy="79" r="12"/><path d="m73 88 13 13"/></svg><strong>수행평가 자료찾기</strong><span class="choice-description">논문과 책에서 찾는 힌트</span></button>
+    </div><p class="home-footnote">작은 하루들이 모여, 우리 반의 이야기가 돼요. 🐾</p>
+  </main>
+  <main id="account-page"><p class="loading-message" role="status">우리 반 게시판을 열고 있어요냥 🐾</p></main>
+  <main id="boards-page" hidden></main>
+  <main id="calendar-page" hidden>
+    <div class="eyebrow"><span></span> OUR CLASS, OUR DAYS</div>
+    <section class="intro" aria-labelledby="page-title"><div><h1 id="page-title">우리의 한 달,<br>한눈에 모아보기.</h1><p>함께하는 날부터 쉬어가는 날까지.<br class="mobile-break"> 우리 반 학사일정을 확인해요.</p></div><div class="sun" aria-hidden="true"><svg viewBox="0 0 120 120" fill="none"><g stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="60" cy="60" r="26"/><path d="M60 8v12m0 80v12M8 60h12m80 0h12M23 23l9 9m56 56 9 9M23 97l9-9m56-56 9-9M40 12l5 12m30 72 5 12M12 40l12 5m72 30 12 5M12 80l12-5m72-30 12-5M40 108l5-12m30-72 5-12"/><path d="M50 57v4m20-4v4m-20 9q10 9 20 0"/></g></svg><span>Have a lovely day!</span></div></section>
+    <section class="calendar-section" aria-label="학사일정 달력">
+      <div class="section-label"><span class="label-icon" aria-hidden="true">▦</span> 학사일정 <span class="semester">2026학년도 · 2학기</span></div>
+      <div class="calendar-card">
+        <div class="calendar-toolbar"><div class="month-heading"><span id="year-label"></span><h2 id="month-label" aria-live="polite"></h2></div><div class="month-controls"><button class="today-button" id="today">오늘</button><button class="arrow" id="prev" aria-label="이전 달"><svg viewBox="0 0 24 24"><path d="m14 6-6 6 6 6"/></svg></button><button class="arrow" id="next" aria-label="다음 달"><svg viewBox="0 0 24 24"><path d="m10 6 6 6-6 6"/></svg></button></div></div>
+        <div class="weekdays" aria-hidden="true"><span>일</span><span>월</span><span>화</span><span>수</span><span>목</span><span>금</span><span>토</span></div>
+        <div id="calendar" class="calendar-grid" role="group" aria-label="날짜 선택"></div>
+        <div class="calendar-footer"><span><i class="dot exam"></i>시험·평가</span><span><i class="dot holiday"></i>휴일</span><span><i class="dot event"></i>학교행사</span><span class="date-hint">날짜를 눌러 일정을 확인해요</span></div>
+      </div>
+    </section>
+    <section class="schedule-section" aria-labelledby="schedule-title"><div class="schedule-heading"><h2 id="schedule-title">이번 달 일정 <span id="event-count"></span></h2><button id="show-all" hidden>월 전체 보기 ↗</button><span class="small-note" id="schedule-note">놓치지 말고 챙겨요</span></div><div id="event-list" aria-live="polite"></div></section>
+    <aside class="notice"><span aria-hidden="true">ⓘ</span><p>학교 사정에 따라 일정이 변경될 수 있어요.<br>정확한 일정은 학교 공지사항도 함께 확인해 주세요.</p></aside>
+    <footer><span>2-4반의 하루하루가 모여, 우리의 한 해가 돼요.</span><span class="footer-mark" aria-hidden="true">✳</span></footer>
+  </main>
+</body>
+</html>
