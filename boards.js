@@ -7,6 +7,9 @@
   let seatEditMode = false;
   let seatEditorId = '';
   let seatProfiles = {};
+  let fullSeatDraft = null;
+  let selectedSeatStudent = '';
+  let seatSaving = false;
 
   const SEAT_EDITORS = ['20410', '20431', '20434'];
   const el = (tag, className, text) => {
@@ -97,8 +100,11 @@
   async function renderClass24() {
     seatEditMode = false;
     seatEditorId = '';
+    fullSeatDraft = null;
+    selectedSeatStudent = '';
+    seatSaving = false;
     page.innerHTML = `<div class="eyebrow"><span></span>OUR CLASSROOM 2-4</div>
-      <section class="board-hero class24-hero"><div><h1>2-4</h1><p>우리 반 자리표와 생일 정보를 한눈에 확인해요.</p></div><button id="seat-edit" class="tiny-button" type="button">자리 수정하기</button></section>
+      <section class="board-hero class24-hero"><div><h1>2-4</h1><p>우리 반 자리표와 생일 정보를 한눈에 확인해요.</p></div><button id="seat-edit" class="tiny-button" type="button">자리 바꾸기</button></section>
       <p id="class24-status" class="board-status" role="status"></p>
       <section id="seat-layout" class="seat-layout" aria-label="2-4 자리표"></section>
       <section id="birthday-board" class="birthday-board" aria-label="생일 정보"></section>`;
@@ -114,6 +120,8 @@
       renderBirthdayBoard(profilesRes.profiles);
       status.textContent = '';
       document.getElementById('seat-edit').onclick = () => {
+        if (seatSaving) return;
+        if (fullSeatDraft) { status.textContent = '전체 자리 배치를 저장하거나 취소해 주세요.'; return; }
         const id = window.prompt('자리 수정 권한 확인용 학번을 입력해 주세요.');
         if (!id || !SEAT_EDITORS.includes(id.trim())) {
           window.alert('권한이 없습니다.');
@@ -124,13 +132,104 @@
           return;
         }
         seatEditorId = id.trim();
-        seatEditMode = true;
-        status.textContent = '자리 수정 모드예요. 프로필 카드를 드래그해서 자리 이동하세요.';
-        renderSeatLayout(seatsRes.seats, status);
+        showSeatEditChoices(seatsRes.seats, status);
       };
     } catch (error) {
       status.textContent = error.message || '정보를 불러오지 못했어요.';
     }
+  }
+
+  function showSeatEditChoices(seats, status) {
+    const dialog = el('dialog', 'seat-mode-dialog');
+    dialog.setAttribute('aria-label', '자리 바꾸기 방식 선택');
+    dialog.append(el('h2', '', '자리를 어떻게 바꿀까요?'));
+    const choices = el('div', 'seat-edit-actions');
+    for (const [label, full] of [['전체 바꾸기', true], ['일부 바꾸기', false]]) {
+      const button = el('button', 'tiny-button', label);
+      button.type = 'button';
+      button.onclick = () => {
+        seatEditMode = !full;
+        fullSeatDraft = full ? seats.map(item => ({ slot: item.slot, student_id: '' })) : null;
+        selectedSeatStudent = '';
+        status.textContent = full
+          ? '아래 학생 프로필을 선택한 뒤 빈자리를 눌러 주세요. 배치된 학생을 누르면 대기 목록으로 돌아가요.'
+          : '일부 자리 수정 모드예요. 프로필 카드를 드래그해서 자리 이동하세요.';
+        dialog.close();
+        renderSeatLayout(seats, status);
+      };
+      choices.append(button);
+    }
+    const cancel = el('button', 'tiny-button', '취소');
+    cancel.type = 'button';
+    cancel.onclick = () => dialog.close();
+    choices.append(cancel);
+    dialog.append(el('p', '', '전체: 책상 배치를 유지하고 모든 학생을 다시 배치해요. 일부: 드래그해서 두 학생의 자리를 맞바꿔요.'), choices);
+    dialog.addEventListener('close', () => dialog.remove());
+    page.append(dialog);
+    dialog.showModal();
+  }
+
+  function renderSeatWaitingList(board, seats, status) {
+    const assigned = new Set(fullSeatDraft.map(item => item.student_id).filter(Boolean));
+    const ids = [...new Set(seats.map(item => item.student_id).filter(Boolean))].sort();
+    const waiting = ids.filter(id => !assigned.has(id));
+    const panel = el('section', 'seat-waiting');
+    panel.setAttribute('aria-label', '자리 배치 대기 학생');
+    panel.append(el('h2', '', `배치할 학생 ${waiting.length}명`),
+      el('p', '', '학생 프로필 → 빈자리 순서로 눌러 배치하세요. 배치된 학생을 누르면 아래로 돌아와요.'));
+    const list = el('div', 'seat-waiting-list');
+    waiting.forEach(id => {
+      const card = el('button', 'seat-cell seat-waiting-card');
+      card.type = 'button';
+      card.disabled = seatSaving;
+      card.setAttribute('aria-pressed', String(selectedSeatStudent === id));
+      card.append(avatarBubble(seatProfiles[id]), el('span', 'seat-name', profileNameText(seatProfiles[id]) === '미지정' ? id : profileNameText(seatProfiles[id])), el('small', 'seat-id', id));
+      card.onclick = () => {
+        selectedSeatStudent = selectedSeatStudent === id ? '' : id;
+        status.textContent = selectedSeatStudent ? `${profileNameText(seatProfiles[id])} 학생을 배치할 빈자리를 눌러 주세요.` : '배치할 학생을 선택해 주세요.';
+        renderSeatLayout(seats, status);
+      };
+      list.append(card);
+    });
+    const actions = el('div', 'seat-edit-actions');
+    const save = el('button', 'tiny-button', seatSaving ? '저장 중…' : '전체 배치 저장');
+    const cancel = el('button', 'tiny-button', '취소');
+    save.type = cancel.type = 'button';
+    save.disabled = seatSaving || waiting.length > 0 || fullSeatDraft.some(item => !item.student_id);
+    cancel.disabled = seatSaving;
+    cancel.onclick = () => {
+      fullSeatDraft = null;
+      selectedSeatStudent = '';
+      renderSeatLayout(seats, status);
+      status.textContent = '전체 자리 바꾸기를 취소했어요. 기존 자리표를 유지해요.';
+    };
+    save.onclick = async () => {
+      if (seatSaving || save.disabled) return;
+      seatSaving = true;
+      const version = revision;
+      const payload = Object.fromEntries(fullSeatDraft.map(item => [item.slot, item.student_id]));
+      renderSeatLayout(seats, status);
+      status.textContent = '전체 자리 배치를 저장하고 있어요…';
+      try {
+        const result = await app.api('seats', { editor_id: seatEditorId, seats: payload });
+        if (version !== revision || current !== 'class24') return;
+        seats.splice(0, seats.length, ...result.seats);
+        fullSeatDraft = null;
+        selectedSeatStudent = '';
+        status.textContent = '전체 자리 배치를 저장했어요.';
+      } catch (error) {
+        if (version !== revision || current !== 'class24') return;
+        status.textContent = error.message || '저장하지 못했어요. 다시 시도해 주세요.';
+      } finally {
+        if (version === revision && current === 'class24') {
+          seatSaving = false;
+          renderSeatLayout(seats, status);
+        }
+      }
+    };
+    actions.append(save, cancel);
+    panel.append(list, actions);
+    board.append(panel);
   }
 
   function slotSort(a, b) {
@@ -176,7 +275,7 @@
 
   function renderSeatLayout(seats, status) {
     const board = document.getElementById('seat-layout');
-    const bySlot = Object.fromEntries(seats.map(item => [item.slot, item.student_id]));
+    const bySlot = Object.fromEntries((fullSeatDraft || seats).map(item => [item.slot, item.student_id]));
     board.replaceChildren();
     const allDesk = el('section', 'seat-all-wrap');
     let draggingSlot = '';
@@ -197,7 +296,29 @@
           seat.dataset.slot = slot;
           seat.draggable = seatEditMode;
           seat.append(avatarBubble(profile), el('span', 'seat-name', profileNameText(profile)), el('small', 'seat-id', sid || '미지정'));
-          if (seatEditMode) {
+          if (fullSeatDraft) {
+            seat.draggable = false;
+            seat.disabled = seatSaving;
+            seat.classList.add('seat-full-edit');
+            if (!sid) seat.replaceChildren(el('span', 'seat-name', '빈자리'), el('small', 'seat-id', `${row}행 ${side === 'L' ? '왼쪽' : '오른쪽'}`));
+            seat.setAttribute('aria-label', `${group}분단 ${row}행 ${side === 'L' ? '왼쪽' : '오른쪽'}: ${sid ? profileNameText(profile) : '빈자리'}`);
+            seat.onclick = () => {
+              if (seatSaving) return;
+              const target = fullSeatDraft.find(item => item.slot === slot);
+              if (target.student_id) {
+                selectedSeatStudent = target.student_id;
+                target.student_id = '';
+                status.textContent = '학생을 대기 목록으로 옮겼어요. 다시 배치할 빈자리를 눌러 주세요.';
+              } else if (selectedSeatStudent) {
+                target.student_id = selectedSeatStudent;
+                selectedSeatStudent = '';
+                status.textContent = '배치했어요. 다음 학생을 선택해 주세요.';
+              } else {
+                status.textContent = '아래에서 배치할 학생 프로필을 먼저 선택해 주세요.';
+              }
+              renderSeatLayout(seats, status);
+            };
+          } else if (seatEditMode) {
             seat.classList.add('editable');
             seat.addEventListener('dragstart', event => {
               draggingSlot = slot;
@@ -237,6 +358,7 @@
       allDesk.append(section);
     }
     board.append(allDesk);
+    if (fullSeatDraft) renderSeatWaitingList(board, seats, status);
   }
 
   function daysUntil(month, day) {

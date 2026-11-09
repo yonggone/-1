@@ -168,3 +168,17 @@ main{max-width:1040px;margin:auto;padding:38px 35px 20px}
 }
 @media(max-width:360px){.brand{font-size:15px}.brand-label small{font-size:7px}.header-inner{gap:8px;padding-left:11px;padding-right:11px}#home-page{padding-left:12px;padding-right:12px}.scrapboard{gap:23px 17px;grid-template-rows:175px 235px 215px 208px 143px;padding:0 6px}.calendar-object{height:225px;padding-left:6px;padding-right:6px;border-width:6px}.calendar-object strong{font-size:20px}.calendar-object-grid{font-size:9px;gap:7px 2px}.calendar-object-grid i{font-size:6px}.task-object{height:226px;padding-left:8px;padding-right:8px}.task-object strong{font-size:20px;margin-bottom:18px}.task-checklist{font-size:8px;gap:16px}.task-checklist span{gap:4px}.task-object .object-footer{font-size:7px}.object-topline{font-size:6px}.stamp-object{height:208px;padding-left:7px;padding-right:7px}.stamp-picture svg{height:100px}.stamp-object strong{font-size:15px}.stamp-object .choice-description{font-size:7px}.film-object{padding-left:14px;padding-right:14px}.film-frame svg{height:117px}.film-object strong{font-size:17px}.film-top{font-size:5px}.ticket-object{height:203px}.ticket-display{font-size:44px}.ticket-object strong{font-size:16px}.ticket-object .choice-description{font-size:7px}.club-object{width:131px!important;height:131px}.club-object strong{font-size:14px}.club-ring{font-size:5px}.club-object .choice-description{font-size:7px}.deco-note{width:101px;min-height:94px;font-size:14px}.deco-note em{font-size:16px}.board-hero h1{font-size:26px}.calendar-toolbar{padding-left:7px;padding-right:7px}.month-heading h2{font-size:24px}.calendar-footer{gap:7px}.calendar-footer>span{font-size:8px}}
 @media(prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important}.home-choice,.board-navigation button,.polaroid,.resource-card:nth-child(2){transform:none}}
+
+/* 자리 바꾸기 방식 선택과 전체 배치 대기 영역 */
+.seat-mode-dialog{max-width:480px;width:calc(100% - 48px);border:1px solid #b89b6d;border-radius:8px;background:#fff5dc;color:#553f2b;padding:24px}
+.seat-mode-dialog::backdrop{background:rgba(0,0,0,.45)}
+.seat-mode-dialog h2,.seat-waiting h2{font-size:20px;margin:0 0 12px}
+.seat-mode-dialog p,.seat-waiting p{font-size:14px;line-height:1.7}
+.seat-edit-actions{display:flex;flex-wrap:wrap;gap:10px;margin-top:18px}
+.seat-edit-actions button{min-height:44px}
+.seat-edit-actions button:disabled{opacity:.5;cursor:default}
+.seat-waiting{margin-top:22px;padding:18px;border:1px solid #b89b6d;border-radius:6px;background:#fff5dc;color:#553f2b}
+.seat-waiting-list{display:grid;grid-template-columns:repeat(auto-fill,minmax(88px,1fr));gap:10px}
+.seat-waiting-card,.seat-full-edit{cursor:pointer;min-height:78px}
+.seat-waiting-card[aria-pressed="true"]{outline:3px solid #496d46;outline-offset:2px;background:#e0e9c9}
+.seat-waiting-card:focus-visible,.seat-full-edit:focus-visible{outline:3px solid #496d46;outline-offset:2px}
