@@ -26,6 +26,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, unquote
 
 from database import ROOT, DB, DATABASE_URL, connect, initialize_schema
+from image_storage import store_image, load_image
 ATTEMPTS = {}
 LOCK = threading.Lock()
 TTL = 30 * 24 * 60 * 60
@@ -66,6 +67,18 @@ def initialize():
             db.executemany('INSERT INTO seat_layout(slot,student_id) VALUES(?,?)', list(zip(slots, default_ids)))
     if not DATABASE_URL:
         os.chmod(DB, 0o600)
+
+NOTIFICATION_KINDS = ('assignments', 'notices', 'photos', 'class24')
+
+def board_revision(db, kind):
+    return db.execute('SELECT revision FROM board_updates WHERE kind=?', (kind,)).fetchone()['revision']
+
+def record_update(db, kind):
+    db.execute('UPDATE board_updates SET revision=revision+1 WHERE kind=?', (kind,))
+
+def notifications(db, user_id):
+    rows = db.execute('SELECT u.kind,u.revision,COALESCE(r.revision,0) AS seen FROM board_updates u LEFT JOIN board_reads r ON r.kind=u.kind AND r.user_id=?', (user_id,)).fetchall()
+    return {row['kind']: row['revision'] > row['seen'] for row in rows}
 
 def public(user):
     return {k:user[k] for k in ('id','name','role','birthday','instagram','must_change')}
@@ -216,6 +229,10 @@ def process_avatar(encoded):
 
 class Handler(BaseHTTPRequestHandler):
     def binary(self, content, mime, filename=None):
+        try:
+            content = load_image(content)
+        except ValueError as error:
+            return self.reply(502, {"error": str(error)})
         self.send_response(200)
         self.send_header('Content-Type',mime)
         self.send_header('Content-Length',str(len(content)))
@@ -283,18 +300,25 @@ class Handler(BaseHTTPRequestHandler):
                 return self.reply(401,{'error':'먼저 로그인해 주세요'})
             if user['must_change']:
                 return self.reply(403,{'error':'먼저 비밀번호를 바꿔 주세요.'})
+            if path == '/api/notifications':
+                with connect() as db:
+                    result = notifications(db, user['id'])
+                return self.reply(200, {'unread': result})
             if path == '/api/assignments':
                 with connect() as db:
+                    snapshot = board_revision(db, 'assignments')
                     rows=db.execute('SELECT assignments.id,title,subject,scheduled_date,content,author,created_at,image IS NOT NULL AS has_image,users.name AS author_name FROM assignments JOIN users ON users.id=assignments.author ORDER BY assignments.id DESC').fetchall()
-                return self.reply(200,{'assignments':[dict(row) for row in rows]})
+                return self.reply(200,{'assignments':[dict(row) for row in rows], 'revision': snapshot})
             if path == '/api/notices':
                 with connect() as db:
+                    snapshot = board_revision(db, 'notices')
                     rows=db.execute('SELECT notices.id,title,subject,scheduled_date,content,author,created_at,image IS NOT NULL AS has_image,users.name AS author_name FROM notices JOIN users ON users.id=notices.author ORDER BY notices.id DESC').fetchall()
-                return self.reply(200,{'notices':[dict(row) for row in rows]})
+                return self.reply(200,{'notices':[dict(row) for row in rows], 'revision': snapshot})
             if path == '/api/photos':
                 with connect() as db:
+                    snapshot = board_revision(db, 'photos')
                     rows=db.execute('SELECT photos.id,caption,author,created_at,users.name AS author_name FROM photos JOIN users ON users.id=photos.author ORDER BY photos.id DESC').fetchall()
-                return self.reply(200,{'photos':[dict(row) for row in rows]})
+                return self.reply(200,{'photos':[dict(row) for row in rows], 'revision': snapshot})
             post_image_route = re.fullmatch(r'/api/(assignments|notices)/([1-9][0-9]*)/image', path)
             if post_image_route:
                 table, post_id = post_image_route.groups()
@@ -328,8 +352,9 @@ class Handler(BaseHTTPRequestHandler):
                 return self.binary(found['avatar'], found['avatar_mime'] or 'image/jpeg')
             if path == '/api/seats':
                 with connect() as db:
+                    snapshot = board_revision(db, 'class24')
                     seats = db.execute('SELECT slot,student_id FROM seat_layout ORDER BY slot').fetchall()
-                return self.reply(200, {'seats': [dict(row) for row in seats]})
+                return self.reply(200, {'seats': [dict(row) for row in seats], 'revision': snapshot})
             return self.reply(404,{'error':'찾을 수 없는 요청이에요.'})
         files = {'/':'index.html', **{'/'+f:f for f in ['index.html','app.js','style.css','account.js','account.css','boards.js','boards.css','chalkboard.css']}}
         # Serve only the theme assets explicitly bundled with the app.
@@ -390,6 +415,7 @@ class Handler(BaseHTTPRequestHandler):
                 if not db.execute('SELECT 1 FROM users WHERE id=?', (target,)).fetchone():
                     return self.reply(404, {'error':'프로필을 찾을 수 없습니다.'})
                 db.execute('UPDATE users SET name=? WHERE id=?', (name.strip(), target))
+                record_update(db, 'class24')
             return self.reply(200, {'id':target, 'name':name.strip()})
         if path == '/api/login':
             account,password = data.get('id',''),data.get('password','')
@@ -431,11 +457,22 @@ class Handler(BaseHTTPRequestHandler):
             return self.new_session(updated,token,revoke=True)
         if user['must_change']:
             return self.reply(403,{'error':'먼저 비밀번호를 바꿔 주세요.'})
+        if path == '/api/notifications/read':
+            kind, revision = data.get('kind'), data.get('revision')
+            if kind not in NOTIFICATION_KINDS or type(revision) is not int or revision < 0:
+                return self.reply(400, {'error':'읽음 정보를 확인해 주세요.'})
+            with connect() as db:
+                revision = min(revision, board_revision(db, kind))
+                db.execute('INSERT INTO board_reads(user_id,kind,revision) VALUES(?,?,?) ON CONFLICT(user_id,kind) DO UPDATE SET revision=CASE WHEN excluded.revision > board_reads.revision THEN excluded.revision ELSE board_reads.revision END', (user['id'], kind, revision))
+                result = notifications(db, user['id'])
+            return self.reply(200, {'unread': result})
         if path in ('/api/assignments', '/api/notices'):
             table = board_table(path.rsplit('/', 1)[-1])
             try:
                 values = read_post_payload(data)
                 image, image_mime = process_post_image(data.get('image'))
+                if path in ('/api/assignments', '/api/notices'):
+                    image = store_image(image)
             except ValueError as error:
                 return self.reply(400, {'error': str(error)})
             with connect() as db:
@@ -444,6 +481,7 @@ class Handler(BaseHTTPRequestHandler):
                     (*values.values(),user['id'],datetime.datetime.now(datetime.timezone.utc).isoformat(),image,image_mime)
                 )
                 row=db.execute(f'SELECT id,title,subject,scheduled_date,content,author,created_at,image IS NOT NULL AS has_image FROM {table} WHERE id=?',(cursor.fetchone()['id'],)).fetchone()
+                record_update(db, table)
             return self.reply(201,{table[:-1]:dict(row)})
         edit_route = re.fullmatch(r'/api/(assignments|notices)/([1-9][0-9]*)/edit', path)
         if edit_route:
@@ -455,6 +493,8 @@ class Handler(BaseHTTPRequestHandler):
             remove_image = bool(data.get('remove_image'))
             try:
                 image, image_mime = process_post_image(data.get('image'))
+                if path in ('/api/assignments', '/api/notices'):
+                    image = store_image(image)
             except ValueError as error:
                 return self.reply(400, {'error': str(error)})
             with connect() as db:
@@ -467,12 +507,16 @@ class Handler(BaseHTTPRequestHandler):
                 if remove_image:
                     next_image, next_mime = None, ''
                 if image is not None:
-                    next_image, next_mime = image, image_mime
+                    try:
+                        next_image, next_mime = store_image(image), image_mime
+                    except ValueError as error:
+                        return self.reply(502, {"error": str(error)})
                 db.execute(
                     f'UPDATE {table} SET title=?,subject=?,scheduled_date=?,content=?,image=?,image_mime=? WHERE id=?',
                     (values['title'], values['subject'], values['scheduled_date'], values['content'], next_image, next_mime, post_id)
                 )
                 row = db.execute(f'SELECT id,title,subject,scheduled_date,content,author,created_at,image IS NOT NULL AS has_image FROM {table} WHERE id=?', (post_id,)).fetchone()
+                record_update(db, table)
             return self.reply(200, {table[:-1]: dict(row)})
         delete_route = re.fullmatch(r'/api/(assignments|notices)/([1-9][0-9]*)/delete', path)
         if delete_route:
@@ -484,6 +528,7 @@ class Handler(BaseHTTPRequestHandler):
                 if found['author'] != user['id']:
                     return self.reply(403, {'error':'내가 작성한 게시물만 삭제할 수 있어요.'})
                 db.execute(f'DELETE FROM {table} WHERE id=?', (post_id,))
+                record_update(db, table)
             return self.reply(200, {'ok':True})
         if path == '/api/photos':
             caption=data.get('caption','')
@@ -491,11 +536,13 @@ class Handler(BaseHTTPRequestHandler):
                 return self.reply(400,{'error':'사진 설명은 140자 이내로 써 주세요.'})
             try:
                 original,preview,mime,extension=process_photo(data.get('image'))
+                original, preview = store_image(original), store_image(preview)
             except ValueError as error:
                 return self.reply(400,{'error':str(error)})
             with connect() as db:
                 cursor=db.execute('INSERT INTO photos(caption,author,created_at,original,preview,mime,extension) VALUES(?,?,?,?,?,?,?) RETURNING id',(caption.strip(),user['id'],datetime.datetime.now(datetime.timezone.utc).isoformat(),original,preview,mime,extension))
                 row=db.execute('SELECT id,caption,author,created_at FROM photos WHERE id=?',(cursor.fetchone()['id'],)).fetchone()
+                record_update(db, 'photos')
             return self.reply(201,{'photo':dict(row)})
         if path == '/api/profile':
             birthday,instagram = data.get('birthday',''),data.get('instagram','')
@@ -525,8 +572,13 @@ class Handler(BaseHTTPRequestHandler):
                 if remove_avatar:
                     next_avatar, next_avatar_mime = None, ''
                 if avatar is not None:
-                    next_avatar, next_avatar_mime = avatar, avatar_mime
+                    try:
+                        next_avatar, next_avatar_mime = store_image(avatar), avatar_mime
+                    except ValueError as error:
+                        return self.reply(502, {"error": str(error)})
                 db.execute('UPDATE users SET name=?,birthday=?,instagram=?,avatar=?,avatar_mime=? WHERE id=?',(name.strip(),birthday,instagram,next_avatar,next_avatar_mime,user['id']))
+                if name.strip() != user['name'] or birthday != user['birthday']:
+                    record_update(db, 'class24')
                 updated = db.execute('SELECT * FROM users WHERE id=?',(user['id'],)).fetchone()
             return self.reply(200,{'user':public(updated)})
         if path == '/api/seats':
@@ -556,6 +608,7 @@ class Handler(BaseHTTPRequestHandler):
                     if not found or found['role'] != 'student':
                         return self.reply(400, {'error':f'{sid} 학번은 사용할 수 없어요.'})
                 db.executemany('UPDATE seat_layout SET student_id=? WHERE slot=?', updates)
+                record_update(db, 'class24')
                 rows = db.execute('SELECT slot,student_id FROM seat_layout ORDER BY slot').fetchall()
             return self.reply(200, {'seats': [dict(row) for row in rows]})
         self.reply(404,{'error':'찾을 수 없는 요청이에요.'})

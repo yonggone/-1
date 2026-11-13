@@ -11,6 +11,43 @@
   let selectedSeatStudent = '';
   let seatSaving = false;
 
+  let notificationUser = null;
+  let notificationRequest = 0;
+  function paintNotifications(unread = {}) {
+    navigation.querySelectorAll('[data-board]').forEach(button => {
+      const kind = button.dataset.board;
+      let badge = button.querySelector('.new-badge');
+      if (unread[kind]) {
+        if (!badge) {
+          badge = el('span', 'new-badge', 'NEW');
+          button.append(badge);
+        }
+        badge.setAttribute('aria-label', '새 글 또는 변경사항 있음');
+      } else badge?.remove();
+    });
+  }
+  async function refreshNotifications() {
+    const user = app.getUser();
+    if (!user || user.must_change || document.hidden) return;
+    const request = ++notificationRequest;
+    try {
+      const data = await app.api('notifications');
+      if (request === notificationRequest && app.getUser()?.id === user.id) paintNotifications(data.unread);
+    } catch (_) { /* Keep unread state until the next successful refresh. */ }
+  }
+  async function acknowledge(kind, snapshot) {
+    const user = app.getUser();
+    if (!user || document.hidden) return;
+    const request = ++notificationRequest;
+    try {
+      const data = await app.api('notifications/read', { kind, revision: snapshot });
+      if (request === notificationRequest && app.getUser()?.id === user.id) paintNotifications(data.unread);
+    } catch (_) { /* Failed reads remain unread. */ }
+  }
+  setInterval(refreshNotifications, 15000);
+  window.addEventListener('focus', refreshNotifications);
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) refreshNotifications(); });
+
   const SEAT_EDITORS = ['20410', '20431', '20434'];
   const el = (tag, className, text) => {
     const node = document.createElement(tag);
@@ -53,6 +90,12 @@
     const { kind, user } = event.detail;
     revision++;
     current = kind;
+    if (notificationUser !== user?.id || !user || user.must_change) {
+      notificationUser = user?.id;
+      notificationRequest++;
+      paintNotifications();
+    }
+    refreshNotifications();
     navigation.hidden = !user || Boolean(user.must_change);
     navigation.querySelectorAll('button').forEach(button => {
       if (button.dataset.board === kind) button.setAttribute('aria-current', 'page');
@@ -118,6 +161,7 @@
       seatProfiles = Object.fromEntries(profilesRes.profiles.map(profile => [profile.id, profile]));
       renderSeatLayout(seatsRes.seats, status);
       renderBirthdayBoard(profilesRes.profiles);
+      acknowledge('class24', seatsRes.revision);
       status.textContent = '';
       document.getElementById('seat-edit').onclick = () => {
         if (seatSaving) return;
@@ -464,6 +508,7 @@
       const data = await app.api(kind);
       if (version !== revision || current !== kind) return;
       status.textContent = success;
+      acknowledge(kind, data.revision);
       const items = data[kind], container = document.getElementById('board-items');
       document.getElementById('board-count').textContent = String(items.length).padStart(2, '0');
       if (!items.length) {
@@ -529,7 +574,7 @@
     const caption = el('figcaption');
     caption.append(el('p', 'photo-caption', item.caption || '우리의 작은 순간'), el('p', 'photo-meta', authorText(item.author, item.author_name) + ' · ' + dateText(item.created_at)));
     if (app.getUser()?.role === 'teacher') {
-      const download = el('a', 'download-photo', '↓ 원본 다운로드');
+      const download = el('a', 'download-photo', '↓ 보관본 다운로드');
       download.href = `/api/photos/${item.id}/download`;
       download.setAttribute('download', '');
       caption.append(download);
@@ -538,62 +583,95 @@
     return card;
   }
 
+  async function prepareAlbumPhoto(file) {
+    if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type)) {
+      throw new Error('JPG, PNG, WebP 사진을 골라 주세요.');
+    }
+    let bitmap;
+    try {
+      bitmap = await createImageBitmap(file);
+      const needsCompression = file.size > 10 * 1024 * 1024 || bitmap.width * bitmap.height > 25000000;
+      if (!needsCompression) return await albumDataURL(file);
+      const target = file.size > 500 * 1024 * 1024 ? 500 * 1024 : 8 * 1024 * 1024;
+      const scale = Math.min(1, 4096 / bitmap.width, 4096 / bitmap.height);
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.max(1, Math.round(bitmap.width * scale));
+      canvas.height = Math.max(1, Math.round(bitmap.height * scale));
+      const context = canvas.getContext('2d');
+      context.fillStyle = '#ffffff';
+      context.fillRect(0, 0, canvas.width, canvas.height);
+      context.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+      let blob;
+      for (let attempt = 0; attempt < 18; attempt++) {
+        blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/jpeg', Math.max(.45, .9 - attempt * .08)));
+        if (!blob) throw new Error('사진 압축에 실패했어요.');
+        if (blob.size <= target) return await albumDataURL(blob);
+        if (attempt >= 5) {
+          const smaller = document.createElement('canvas');
+          smaller.width = Math.max(1, Math.floor(canvas.width * .8));
+          smaller.height = Math.max(1, Math.floor(canvas.height * .8));
+          smaller.getContext('2d').drawImage(canvas, 0, 0, smaller.width, smaller.height);
+          canvas.width = smaller.width;
+          canvas.height = smaller.height;
+          context.drawImage(smaller, 0, 0);
+        }
+      }
+      throw new Error('사진을 충분히 줄이지 못했어요. 사진 크기를 줄인 뒤 다시 시도해 주세요.');
+    } catch (error) {
+      throw new Error(error.message || '사진을 읽지 못했어요. 기기에서 사진 크기를 줄인 뒤 다시 시도해 주세요.');
+    } finally {
+      bitmap?.close();
+    }
+  }
+
+  function albumDataURL(file) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result);
+      reader.onerror = () => reject(new Error('사진을 읽지 못했어요.'));
+      reader.readAsDataURL(file);
+    });
+  }
+
   function composePhoto() {
     revision++;
-    const composeVersion = revision;
-    page.innerHTML = `<section class="board-form"><button id="compose-back" class="text-button">← 학급앨범으로 돌아가기</button><h1>오늘을 한 장 남겨 보세요 📷</h1><p class="account-lead">우리 반과 나누고 싶은 순간을 올려 주세요.</p><form id="post-form" class="account-card"><label for="photo-file">사진 선택</label><input id="photo-file" type="file" accept="image/jpeg,image/png,image/webp" required><p class="photo-upload-note">JPG · PNG · WebP / 사진 한 장당 최대 10MB<br>원본은 선생님만 다운로드할 수 있어요.</p><figure id="upload-preview" class="polaroid photo-preview" hidden><img id="upload-preview-image" alt="업로드할 사진 미리보기"><figcaption>우리 반의 새로운 추억</figcaption></figure><label for="photo-caption">사진에 남길 한마디 (선택)</label><textarea id="photo-caption" name="caption" maxlength="140" placeholder="오늘의 추억을 짧게 적어 주세요"></textarea><button type="submit" class="primary-button">사진 올리기</button><p id="post-message" class="form-message" role="status"></p></form></section>`;
-    document.getElementById('compose-back').onclick = () => {
-      revision++;
-      renderBoard('photos');
-    };
+    page.innerHTML = `<section class="board-form"><button id="compose-back" class="text-button">← 학급앨범으로 돌아가기</button><h1>오늘의 추억을 남겨 보세요 📷</h1><p class="account-lead">여러 장을 골라 함께 올릴 수 있어요.</p><form id="post-form" class="account-card"><label for="photo-file">사진 선택 (여러 장 가능)</label><input id="photo-file" type="file" accept="image/jpeg,image/png,image/webp" multiple required><p class="photo-upload-note">JPG · PNG · WebP / 큰 사진은 자동으로 줄여 저장해요.<br>한 장이 500MB를 넘으면 500KB 이하로 압축해요. 10MB 초과 사진은 업로드에 맞게 줄여요.<br>압축하면 화질과 해상도가 낮아지며, 선생님은 저장된 보관본을 다운로드할 수 있어요.</p><p id="selected-photos" role="status"></p><label for="photo-caption">사진에 남길 한마디 (선택, 모든 사진에 적용)</label><textarea id="photo-caption" name="caption" maxlength="140" placeholder="오늘의 추억을 짧게 적어 주세요"></textarea><button type="submit" class="primary-button">사진 올리기</button><p id="post-message" class="form-message" role="status"></p></form></section>`;
     const form = document.getElementById('post-form'), message = document.getElementById('post-message');
-    let imageData = null, selectedFile = null;
-    document.getElementById('photo-file').onchange = async event => {
-      const file = event.target.files[0];
-      selectedFile = file;
-      imageData = null;
+    const input = document.getElementById('photo-file');
+    const back = document.getElementById('compose-back');
+    let pending = [], uploading = false;
+    back.onclick = () => { if (!uploading) { revision++; renderBoard('photos'); } };
+    input.onchange = () => {
+      pending = Array.from(input.files);
+      document.getElementById('selected-photos').textContent = `${pending.length}장 선택됨`;
       message.textContent = '';
-      document.getElementById('upload-preview').hidden = true;
-      if (!file) return;
-      if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type) || file.size > 10 * 1024 * 1024) {
-        message.textContent = '10MB 이하의 JPG, PNG, WebP 사진을 골라 주세요.';
-        event.target.value = '';
-        return;
-      }
-      try {
-        const data = await new Promise((resolve, reject) => {
-          const reader = new FileReader();
-          reader.onload = () => resolve(reader.result);
-          reader.onerror = () => reject(new Error('사진을 읽지 못했어요. 다시 골라 주세요.'));
-          reader.readAsDataURL(file);
-        });
-        if (selectedFile !== file || revision !== composeVersion || !document.getElementById('upload-preview')) return;
-        imageData = data.split(',')[1];
-        document.getElementById('upload-preview-image').src = data;
-        document.getElementById('upload-preview').hidden = false;
-      } catch (error) {
-        message.textContent = error.message;
-      }
     };
     form.onsubmit = async event => {
       event.preventDefault();
+      if (uploading || !pending.length) return;
       const button = form.querySelector('[type="submit"]');
-      button.disabled = true;
-      message.textContent = '사진을 올리고 있어요…';
-      const version = revision;
+      uploading = button.disabled = input.disabled = back.disabled = true;
+      const caption = document.getElementById('photo-caption').value;
+      const total = pending.length;
+      let completed = 0;
       try {
-        const data = Object.fromEntries(new FormData(form));
-        if (!imageData) throw new Error('사진을 선택하고 미리보기가 뜬 뒤 올려 주세요.');
-        data.image = imageData;
-        await app.api('photos', data);
-        if (version !== revision) return;
+        // Remove only acknowledged uploads; retry continues with remaining files.
+        while (pending.length) {
+          const file = pending[0];
+          message.textContent = `${completed + 1}/${total}장 처리 중: ${file.name}`;
+          const data = await prepareAlbumPhoto(file);
+          await app.api('photos', {caption, image: data.split(',')[1]});
+          pending.shift();
+          completed++;
+        }
         revision++;
-        renderBoard('photos', '사진을 올렸어요 📷');
+        renderBoard('photos', `${completed}장의 사진을 올렸어요 📷`);
         window.scrollTo(0, 0);
       } catch (error) {
-        message.textContent = error.message || '저장하지 못했어요. 연결을 확인하고 다시 시도해 주세요.';
+        message.textContent = `${completed}장 저장됨 · ${pending.length}장 남음. ${error.message || '연결을 확인해 주세요.'} 다시 누르면 남은 사진부터 올려요.`;
+        document.getElementById('selected-photos').textContent = `${pending.length}장 남음`;
       } finally {
-        button.disabled = false;
+        uploading = button.disabled = input.disabled = back.disabled = false;
       }
     };
     window.scrollTo(0, 0);

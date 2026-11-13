@@ -64,7 +64,15 @@ class PersistenceTest(unittest.TestCase):
                 request('/api/login', {'id':'20401', 'password':'1234'})
                 request('/api/password', {'password':'restart-test-password'})
                 request('/api/profile', {'name':'테스트', 'birthday':'02-29', 'instagram':'class_test'})
+                self.assertFalse(request('/api/notifications')['unread']['assignments'])
                 assignment = request('/api/assignments', {'title':'재시작 확인', 'subject':'국어', 'scheduled_date':'2026-10-23', 'content':'저장 확인'})['assignment']
+                self.assertTrue(request('/api/notifications')['unread']['assignments'])
+                first_snapshot = request('/api/assignments')['revision']
+                request('/api/notifications/read', {'kind':'assignments','revision':first_snapshot})
+                self.assertFalse(request('/api/notifications')['unread']['assignments'])
+                with self.assertRaises(urllib.error.HTTPError) as invalid_read:
+                    request('/api/notifications/read', {'kind':'calendar','revision':1})
+                self.assertEqual(invalid_read.exception.code, 400)
                 output = io.BytesIO()
                 Image.new('RGB', (10, 10), 'blue').save(output, 'PNG')
                 raw = output.getvalue()
@@ -78,10 +86,17 @@ class PersistenceTest(unittest.TestCase):
                     payload = {'title':'첨부 게시물','subject':'국어','scheduled_date':'2026-10-23','content':'본문','image':encoded}
                     post = request('/api/'+table,payload)[table[:-1]]
                     self.assertTrue(post['has_image'])
+                    snapshot = request('/api/'+table)['revision']
+                    request('/api/notifications/read', {'kind':table,'revision':snapshot})
+                    self.assertFalse(request('/api/notifications')['unread'][table])
                     payload.pop('image')
                     payload['title'] = '수정된 게시물'
                     edited = request(f"/api/{table}/{post['id']}/edit",payload)[table[:-1]]
                     self.assertTrue(edited['has_image'])
+                    self.assertTrue(request('/api/notifications')['unread'][table])
+                    # An older response must not acknowledge a concurrent edit.
+                    request('/api/notifications/read', {'kind':table,'revision':snapshot})
+                    self.assertTrue(request('/api/notifications')['unread'][table])
                     posts[table] = (post['id'], request(f"/api/{table}/{post['id']}/image"))
                     disposable = request('/api/'+table,payload)[table[:-1]]
                     request(f"/api/{table}/{disposable['id']}/delete",{})
@@ -92,7 +107,14 @@ class PersistenceTest(unittest.TestCase):
                 request('/api/password',{'password':'seat-editor-password'})
                 seat_result=request('/api/seats',{'editor_id':'20410','seats':{'G1R1L':'20401','G1R5R':'20412'}})
                 expected_seats = seat_result['seats']
+                self.assertTrue(request('/api/notifications')['unread']['assignments'])
+                snapshot = request('/api/assignments')['revision']
+                request('/api/notifications/read', {'kind':'assignments','revision':snapshot})
+                self.assertFalse(request('/api/notifications')['unread']['assignments'])
                 opener = original_opener
+                self.assertTrue(request('/api/notifications')['unread']['assignments'])
+                photo_snapshot = request('/api/photos')['revision']
+                request('/api/notifications/read', {'kind':'photos','revision':photo_snapshot})
                 with self.assertRaises(urllib.error.HTTPError) as denied:
                     request('/api/seats',{'editor_id':'20410','seats':{'G1R1L':'20402'}})
                 self.assertEqual(denied.exception.code,403)
@@ -112,6 +134,9 @@ class PersistenceTest(unittest.TestCase):
                 self.assertEqual(len(request('/api/assignments')['assignments']), 3)
                 stop()
                 start()
+                self.assertFalse(request('/api/notifications')['unread']['photos'])
+                self.assertTrue(request('/api/notifications')['unread']['assignments'])
+                self.assertTrue(request('/api/notifications')['unread']['class24'])
                 user = request('/api/me')['user']
                 self.assertEqual(user['name'], '테스트')
                 self.assertEqual(user['must_change'], 0)

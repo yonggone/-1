@@ -68,3 +68,9 @@ def initialize_schema(db):
     add_column('assignments', 'image_mime', "TEXT NOT NULL DEFAULT ''")
     db.execute(f"CREATE TABLE IF NOT EXISTS notices (id {identity}, title TEXT NOT NULL, subject TEXT NOT NULL, scheduled_date TEXT NOT NULL, content TEXT NOT NULL, author TEXT NOT NULL, created_at TEXT NOT NULL, image {binary}, image_mime TEXT NOT NULL DEFAULT '')")
     db.execute('CREATE TABLE IF NOT EXISTS seat_layout (slot TEXT PRIMARY KEY, student_id TEXT NOT NULL)')
+
+    # Persist menu revisions and per-account acknowledgements across sessions/devices.
+    db.execute('CREATE TABLE IF NOT EXISTS board_updates (kind TEXT PRIMARY KEY, revision BIGINT NOT NULL DEFAULT 0)')
+    db.execute('CREATE TABLE IF NOT EXISTS board_reads (user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE, kind TEXT NOT NULL, revision BIGINT NOT NULL DEFAULT 0, PRIMARY KEY(user_id,kind))')
+    for kind in ('assignments', 'notices', 'photos', 'class24'):
+        db.execute('INSERT INTO board_updates(kind) VALUES(?) ON CONFLICT(kind) DO NOTHING', (kind,))
