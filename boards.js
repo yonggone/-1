@@ -540,6 +540,22 @@
       imageWrap.append(image);
       card.append(imageWrap);
     }
+    for (const file of item.attachments || []) {
+      const url = `/api/${kind}/${item.id}/attachments/${file.id}`;
+      const wrap = el('div', 'assignment-image-wrap');
+      if (file.mime.startsWith('image/')) {
+        const image = el('img', 'assignment-image');
+        image.src = url;
+        image.alt = file.name;
+        image.loading = 'lazy';
+        wrap.append(image);
+      }
+      const link = el('a', 'download-photo post-file-link', file.name + ' 다운로드');
+      link.href = url;
+      link.download = file.name;
+      wrap.append(link);
+      card.append(wrap);
+    }
     card.append(el('p', 'assignment-content', item.content), el('p', 'assignment-author', '작성자 · ' + authorText(item.author, item.author_name)));
     if (user && user.id === item.author) {
       const actions = el('div', 'post-actions');
@@ -679,10 +695,9 @@
 
   function composePost(kind, existing) {
     revision++;
-    const composeVersion = revision;
     const config = boardConfig[kind];
     const editing = Boolean(existing);
-    page.innerHTML = `<section class="board-form"><button id="compose-back" class="text-button">← ${config.backLabel}으로 돌아가기</button><h1>${editing ? config.title + ' 수정하기' : config.writeTitle}</h1><p class="account-lead">${editing ? '작성한 내용을 고쳐서 다시 저장해 주세요.' : config.writeLead}</p><form id="post-form" class="account-card"><label for="post-title">제목</label><input id="post-title" name="title" maxlength="100" placeholder="예: 국어 발표 수행평가 안내" required><div class="form-row"><div><label for="post-subject">과목</label><input id="post-subject" name="subject" maxlength="30" placeholder="예: 국어" required></div><div><label for="post-date">시행 날짜</label><input id="post-date" type="date" name="scheduled_date" min="0001-01-01" max="9999-12-31" required></div></div><label for="post-content">내용</label><textarea id="post-content" name="content" maxlength="8000" placeholder="평가 내용, 준비물, 주의할 점 등을 써 주세요" required></textarea><label for="post-image">첨부 사진 (선택)</label><input id="post-image" type="file" accept="image/jpeg,image/png,image/webp"><p class="photo-upload-note">JPG · PNG · WebP / 최대 10MB</p><figure id="post-upload-preview" class="polaroid photo-preview" hidden><img id="post-upload-preview-image" alt="첨부할 사진 미리보기"><figcaption>첨부 사진 미리보기</figcaption></figure>${editing && existing.has_image ? '<label class="inline-checkbox"><input type="checkbox" id="remove-post-image">기존 첨부 사진 삭제하기</label>' : ''}<button type="submit" class="primary-button">${editing ? '수정 저장하기' : '게시물 등록하기'}</button><p id="post-message" class="form-message" role="status"></p></form></section>`;
+    page.innerHTML = `<section class="board-form"><button id="compose-back" class="text-button">← ${config.backLabel}으로 돌아가기</button><h1>${editing ? config.title + ' 수정하기' : config.writeTitle}</h1><p class="account-lead">${editing ? '작성한 내용을 고쳐서 다시 저장해 주세요.' : config.writeLead}</p><form id="post-form" class="account-card"><label for="post-title">제목</label><input id="post-title" name="title" maxlength="100" placeholder="예: 국어 발표 수행평가 안내" required><div class="form-row"><div><label for="post-subject">과목</label><input id="post-subject" name="subject" maxlength="30" placeholder="예: 국어" required></div><div><label for="post-date">시행 날짜</label><input id="post-date" type="date" name="scheduled_date" min="0001-01-01" max="9999-12-31" required></div></div><label for="post-content">내용</label><textarea id="post-content" name="content" maxlength="8000" placeholder="평가 내용, 준비물, 주의할 점 등을 써 주세요" required></textarea><label for="post-files">첨부 파일 (선택)</label><input id="post-files" type="file" accept="image/*,.jpg,.jpeg,.jfif,.png,.webp,.gif,.heic,.heif,.avif,.bmp,.tif,.tiff,.pdf,application/pdf" multiple><p class="photo-upload-note">JPG · PNG · WebP · GIF · HEIC/HEIF · AVIF · BMP · TIFF · PDF<br>게시물당 최대 10개, 한 번에 추가하는 파일은 합계 10MB까지 올릴 수 있어요.</p><ul id="post-file-list" class="post-file-list" aria-label="추가할 파일"></ul><div id="existing-post-files"></div><button type="submit" class="primary-button">${editing ? '수정 저장하기' : '게시물 등록하기'}</button><p id="post-message" class="form-message" role="status"></p></form></section>`;
 
     document.getElementById('compose-back').onclick = () => {
       revision++;
@@ -696,34 +711,60 @@
     form.scheduled_date.value = existing?.scheduled_date || '';
     form.content.value = existing?.content || '';
 
-    let imageData = null;
-    let selectedFile = null;
-    const imageInput = document.getElementById('post-image');
-    const preview = document.getElementById('post-upload-preview');
+    const selected = [];
+    const input = document.getElementById('post-files');
+    const list = document.getElementById('post-file-list');
+    const stored = document.getElementById('existing-post-files');
 
-    imageInput.onchange = async event => {
-      const file = event.target.files[0];
-      selectedFile = file;
-      imageData = null;
-      preview.hidden = true;
-      message.textContent = '';
-      if (!file) return;
-      if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type) || file.size > 10 * 1024 * 1024) {
-        message.textContent = '10MB 이하의 JPG, PNG, WebP 사진을 골라 주세요.';
-        event.target.value = '';
-        return;
+    function addRemovalOption(name, value) {
+      const label = el('label', 'inline-checkbox');
+      const checkbox = document.createElement('input');
+      checkbox.type = 'checkbox';
+      checkbox.name = 'remove-file';
+      checkbox.value = value;
+      label.append(checkbox, document.createTextNode(name + ' 삭제하기'));
+      stored.append(label);
+    }
+
+    if (existing?.has_image) addRemovalOption('기존 첨부 사진', 'legacy');
+    for (const file of existing?.attachments || []) addRemovalOption(file.name, file.id);
+
+    function refreshFileList() {
+      list.replaceChildren();
+      selected.forEach((file, index) => {
+        const row = el('li');
+        row.append(el('span', '', file.name));
+        const remove = el('button', 'text-button danger', '빼기');
+        remove.type = 'button';
+        remove.setAttribute('aria-label', file.name + ' 빼기');
+        remove.onclick = () => {
+          selected.splice(index, 1);
+          refreshFileList();
+        };
+        row.append(remove);
+        list.append(row);
+      });
+    }
+
+    function validateFiles(files) {
+      const retained = stored.querySelectorAll('input:not(:checked)').length;
+      if (files.length + retained > 10) throw new Error('기존 파일을 포함해 최대 10개까지 첨부할 수 있어요.');
+      if (files.reduce((total, file) => total + file.size, 0) > 10 * 1024 * 1024) {
+        throw new Error('한 번에 추가하는 파일의 합계를 10MB 이하로 골라 주세요.');
       }
+    }
+
+    input.onchange = () => {
+      const files = Array.from(input.files);
+      input.value = '';
       try {
-        const data = await new Promise((resolve, reject) => {
-          const reader = new FileReader();
-          reader.onload = () => resolve(reader.result);
-          reader.onerror = () => reject(new Error('사진을 읽지 못했어요. 다시 골라 주세요.'));
-          reader.readAsDataURL(file);
-        });
-        if (selectedFile !== file || revision !== composeVersion || !document.getElementById('post-upload-preview')) return;
-        imageData = data.split(',')[1];
-        document.getElementById('post-upload-preview-image').src = data;
-        preview.hidden = false;
+        if (files.some(file => !file.size || !/\.(jpe?g|jfif|png|webp|gif|heic|heif|avif|bmp|tiff?|pdf)$/i.test(file.name))) {
+          throw new Error('비어 있지 않은 지원 이미지나 PDF 파일을 골라 주세요.');
+        }
+        validateFiles([...selected, ...files]);
+        selected.push(...files);
+        refreshFileList();
+        message.textContent = '';
       } catch (error) {
         message.textContent = error.message;
       }
@@ -731,8 +772,8 @@
 
     form.onsubmit = async event => {
       event.preventDefault();
-      const button = form.querySelector('[type="submit"]');
-      button.disabled = true;
+      const controls = [...form.elements].filter(control => !control.disabled);
+      controls.forEach(control => { control.disabled = true; });
       message.textContent = editing ? '게시물을 수정하고 있어요…' : '게시물을 저장하고 있어요…';
       const version = revision;
       try {
@@ -742,8 +783,21 @@
           scheduled_date: form.scheduled_date.value,
           content: form.content.value
         };
-        if (imageData) data.image = imageData;
-        if (editing && document.getElementById('remove-post-image')?.checked) data.remove_image = true;
+        validateFiles(selected);
+        const removed = Array.from(stored.querySelectorAll('input:checked'), input => input.value);
+        if (removed.includes('legacy')) data.remove_image = true;
+        data.remove_attachments = removed.filter(value => value !== 'legacy').map(Number);
+        data.attachments = [];
+        for (const file of selected) {
+          const encoded = await new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = () => resolve(reader.result.split(',')[1]);
+            reader.onerror = () => reject(new Error(file.name + ' 파일을 읽지 못했어요.'));
+            reader.readAsDataURL(file);
+          });
+          data.attachments.push({name: file.name, data: encoded});
+        }
+        if (version !== revision) return;
         if (editing) await app.api(`${kind}/${existing.id}/edit`, data);
         else await app.api(kind, data);
         if (version !== revision) return;
@@ -753,7 +807,7 @@
       } catch (error) {
         message.textContent = error.message || '저장하지 못했어요. 연결을 확인하고 다시 시도해 주세요.';
       } finally {
-        button.disabled = false;
+        controls.forEach(control => { control.disabled = false; });
       }
     };
 

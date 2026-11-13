@@ -67,6 +67,8 @@ def initialize_schema(db):
     add_column('assignments', 'image', binary)
     add_column('assignments', 'image_mime', "TEXT NOT NULL DEFAULT ''")
     db.execute(f"CREATE TABLE IF NOT EXISTS notices (id {identity}, title TEXT NOT NULL, subject TEXT NOT NULL, scheduled_date TEXT NOT NULL, content TEXT NOT NULL, author TEXT NOT NULL, created_at TEXT NOT NULL, image {binary}, image_mime TEXT NOT NULL DEFAULT '')")
+    db.execute(f"CREATE TABLE IF NOT EXISTS post_attachments (id {identity}, board TEXT NOT NULL, post_id BIGINT NOT NULL, name TEXT NOT NULL, mime TEXT NOT NULL, content {binary} NOT NULL)")
+    db.execute('CREATE INDEX IF NOT EXISTS post_attachments_board_post ON post_attachments(board,post_id)')
     db.execute('CREATE TABLE IF NOT EXISTS seat_layout (slot TEXT PRIMARY KEY, student_id TEXT NOT NULL)')
 
     # Persist menu revisions and per-account acknowledgements across sessions/devices.

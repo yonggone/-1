@@ -98,9 +98,42 @@ class PersistenceTest(unittest.TestCase):
                     request('/api/notifications/read', {'kind':table,'revision':snapshot})
                     self.assertTrue(request('/api/notifications')['unread'][table])
                     posts[table] = (post['id'], request(f"/api/{table}/{post['id']}/image"))
-                    disposable = request('/api/'+table,payload)[table[:-1]]
-                    request(f"/api/{table}/{disposable['id']}/delete",{})
-                    self.assertNotIn(disposable['id'],[row['id'] for row in request('/api/'+table)[table]])
+                    sample = Image.new('RGB', (10, 10), 'blue')
+                    output = io.BytesIO()
+                    sample.save(output, 'PDF')
+                    pdf = output.getvalue()
+                    output = io.BytesIO()
+                    sample.save(output, 'AVIF')
+                    mixed = [
+                        {'name': '휴대폰사진.avif', 'data': base64.b64encode(output.getvalue()).decode()},
+                        {'name': '평가안내.pdf', 'data': base64.b64encode(pdf).decode()},
+                        {'name': '사진.png', 'data': encoded},
+                    ]
+                    disposable = request('/api/'+table, dict(payload, attachments=mixed))[table[:-1]]
+                    route = f"/api/{table}/{disposable['id']}"
+                    avif, document, png = disposable['attachments']
+                    listed = request('/api/'+table)[table][0]
+                    self.assertEqual(listed['attachments'], disposable['attachments'])
+                    self.assertEqual(avif['name'], '휴대폰사진.jpg')
+                    self.assertTrue(request(f"{route}/attachments/{avif['id']}").startswith(b'\xff\xd8'))
+                    self.assertEqual(request(f"{route}/attachments/{document['id']}"), pdf)
+                    self.assertTrue(request(f"{route}/attachments/{png['id']}").startswith(b'\x89PNG'))
+                    invalid = dict(payload, remove_attachments=[document['id']],
+                                   attachments=[{'name': 'invalid.pdf', 'data': encoded}])
+                    with self.assertRaises(urllib.error.HTTPError) as bad_attachment:
+                        request(route+'/edit', invalid)
+                    self.assertEqual(bad_attachment.exception.code, 400)
+                    self.assertEqual(request(f"{route}/attachments/{document['id']}"), pdf)
+                    edited = request(route+'/edit', dict(payload, remove_attachments=[avif['id']]))[table[:-1]]
+                    self.assertEqual(edited['attachments'], [document, png])
+                    with self.assertRaises(urllib.error.HTTPError) as removed:
+                        request(f"{route}/attachments/{avif['id']}")
+                    self.assertEqual(removed.exception.code, 404)
+                    request(route+'/delete', {})
+                    self.assertNotIn(disposable['id'], [row['id'] for row in request('/api/'+table)[table]])
+                    with self.assertRaises(urllib.error.HTTPError) as removed_post:
+                        request(f"{route}/attachments/{document['id']}")
+                    self.assertEqual(removed_post.exception.code, 404)
                 original_opener = opener
                 opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()))
                 request('/api/login',{'id':'20410','password':'1234'})

@@ -23,10 +23,11 @@ except ModuleNotFoundError:
     ImageOps = None
     UnidentifiedImageError = OSError
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import urlparse, unquote
+from urllib.parse import urlparse, unquote, quote
 
 from database import ROOT, DB, DATABASE_URL, connect, initialize_schema
 from image_storage import store_image, load_image
+from post_attachments import prepare_attachments, insert_attachments, with_attachments
 ATTEMPTS = {}
 LOCK = threading.Lock()
 TTL = 30 * 24 * 60 * 60
@@ -228,6 +229,14 @@ def process_avatar(encoded):
         raise ValueError('프로필 사진을 읽을 수 없거나 해상도가 너무 커요냥.')
 
 class Handler(BaseHTTPRequestHandler):
+    def saved_post(self, db, table, post_id):
+        row = db.execute(
+            f'SELECT id,title,subject,scheduled_date,content,author,created_at,image IS NOT NULL AS has_image FROM {table} WHERE id=?',
+            (post_id,),
+        ).fetchone()
+        record_update(db, table)
+        return with_attachments(db, table, [row], post_id=post_id)[0]
+
     def binary(self, content, mime, filename=None):
         try:
             content = load_image(content)
@@ -239,7 +248,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header('Cache-Control','private, no-store')
         self.send_header('X-Content-Type-Options','nosniff')
         if filename:
-            self.send_header('Content-Disposition',f'attachment; filename="{filename}"')
+            self.send_header('Content-Disposition', "attachment; filename*=UTF-8''" + quote(filename, safe=''))
         self.end_headers()
         self.wfile.write(content)
 
@@ -308,17 +317,31 @@ class Handler(BaseHTTPRequestHandler):
                 with connect() as db:
                     snapshot = board_revision(db, 'assignments')
                     rows=db.execute('SELECT assignments.id,title,subject,scheduled_date,content,author,created_at,image IS NOT NULL AS has_image,users.name AS author_name FROM assignments JOIN users ON users.id=assignments.author ORDER BY assignments.id DESC').fetchall()
-                return self.reply(200,{'assignments':[dict(row) for row in rows], 'revision': snapshot})
+                    posts = with_attachments(db, 'assignments', rows)
+                return self.reply(200, {'assignments': posts, 'revision': snapshot})
             if path == '/api/notices':
                 with connect() as db:
                     snapshot = board_revision(db, 'notices')
                     rows=db.execute('SELECT notices.id,title,subject,scheduled_date,content,author,created_at,image IS NOT NULL AS has_image,users.name AS author_name FROM notices JOIN users ON users.id=notices.author ORDER BY notices.id DESC').fetchall()
-                return self.reply(200,{'notices':[dict(row) for row in rows], 'revision': snapshot})
+                    posts = with_attachments(db, 'notices', rows)
+                return self.reply(200, {'notices': posts, 'revision': snapshot})
             if path == '/api/photos':
                 with connect() as db:
                     snapshot = board_revision(db, 'photos')
                     rows=db.execute('SELECT photos.id,caption,author,created_at,users.name AS author_name FROM photos JOIN users ON users.id=photos.author ORDER BY photos.id DESC').fetchall()
                 return self.reply(200,{'photos':[dict(row) for row in rows], 'revision': snapshot})
+            attachment_route = re.fullmatch(r'/api/(assignments|notices)/([1-9][0-9]{0,17})/attachments/([1-9][0-9]{0,17})', path)
+            if attachment_route:
+                table, post_id, attachment_id = attachment_route.groups()
+                with connect() as db:
+                    file = db.execute(
+                        'SELECT name,mime,content FROM post_attachments WHERE board=? AND post_id=? AND id=?',
+                        (table, int(post_id), int(attachment_id)),
+                    ).fetchone()
+                if not file:
+                    return self.reply(404, {'error': '첨부 파일을 찾을 수 없어요.'})
+                download_name = file['name'] if file['mime'] == 'application/pdf' else None
+                return self.binary(file['content'], file['mime'], download_name)
             post_image_route = re.fullmatch(r'/api/(assignments|notices)/([1-9][0-9]*)/image', path)
             if post_image_route:
                 table, post_id = post_image_route.groups()
@@ -470,57 +493,62 @@ class Handler(BaseHTTPRequestHandler):
             table = board_table(path.rsplit('/', 1)[-1])
             try:
                 values = read_post_payload(data)
+                files = prepare_attachments(data.get('attachments', []))
                 image, image_mime = process_post_image(data.get('image'))
-                if path in ('/api/assignments', '/api/notices'):
-                    image = store_image(image)
+                with connect() as db:
+                    cursor = db.execute(
+                        f'INSERT INTO {table}(title,subject,scheduled_date,content,author,created_at,image,image_mime) VALUES(?,?,?,?,?,?,?,?) RETURNING id',
+                        (*values.values(), user['id'], datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                         store_image(image), image_mime),
+                    )
+                    post_id = cursor.fetchone()['id']
+                    insert_attachments(db, table, post_id, files)
+                    post = self.saved_post(db, table, post_id)
             except ValueError as error:
                 return self.reply(400, {'error': str(error)})
-            with connect() as db:
-                cursor=db.execute(
-                    f'INSERT INTO {table}(title,subject,scheduled_date,content,author,created_at,image,image_mime) VALUES(?,?,?,?,?,?,?,?) RETURNING id',
-                    (*values.values(),user['id'],datetime.datetime.now(datetime.timezone.utc).isoformat(),image,image_mime)
-                )
-                row=db.execute(f'SELECT id,title,subject,scheduled_date,content,author,created_at,image IS NOT NULL AS has_image FROM {table} WHERE id=?',(cursor.fetchone()['id'],)).fetchone()
-                record_update(db, table)
-            return self.reply(201,{table[:-1]:dict(row)})
-        edit_route = re.fullmatch(r'/api/(assignments|notices)/([1-9][0-9]*)/edit', path)
+            return self.reply(201, {table[:-1]: post})
+        edit_route = re.fullmatch(r'/api/(assignments|notices)/([1-9][0-9]{0,17})/edit', path)
         if edit_route:
             table, post_id = edit_route.groups()
+            post_id = int(post_id)
             try:
-                values = read_post_payload(data)
-            except ValueError as error:
-                return self.reply(400, {'error': str(error)})
-            remove_image = bool(data.get('remove_image'))
-            try:
-                image, image_mime = process_post_image(data.get('image'))
-                if path in ('/api/assignments', '/api/notices'):
-                    image = store_image(image)
-            except ValueError as error:
-                return self.reply(400, {'error': str(error)})
-            with connect() as db:
-                found = db.execute(f'SELECT author,image,image_mime FROM {table} WHERE id=?', (post_id,)).fetchone()
-                if not found:
-                    return self.reply(404, {'error':'게시물을 찾을 수 없어요.'})
-                if found['author'] != user['id']:
-                    return self.reply(403, {'error':'내가 작성한 게시물만 수정할 수 있어요.'})
-                next_image, next_mime = found['image'], found['image_mime']
-                if remove_image:
-                    next_image, next_mime = None, ''
-                if image is not None:
-                    try:
+                with connect() as db:
+                    if not DATABASE_URL:
+                        db.execute('BEGIN IMMEDIATE')
+                    lock = ' FOR UPDATE' if DATABASE_URL else ''
+                    found = db.execute(f'SELECT author,image,image_mime FROM {table} WHERE id=?' + lock, (post_id,)).fetchone()
+                    if not found:
+                        return self.reply(404, {'error':'게시물을 찾을 수 없어요.'})
+                    if found['author'] != user['id']:
+                        return self.reply(403, {'error':'내가 작성한 게시물만 수정할 수 있어요.'})
+                    values = read_post_payload(data)
+                    files = prepare_attachments(data.get('attachments', []))
+                    remove_ids = data.get('remove_attachments', [])
+                    if (not isinstance(remove_ids, list) or len(remove_ids) > 10
+                            or any(type(item) is not int or not 0 < item < 2**63 for item in remove_ids)):
+                        raise ValueError('삭제할 첨부 파일을 다시 확인해 주세요.')
+                    image, image_mime = process_post_image(data.get('image'))
+                    next_image, next_mime = found['image'], found['image_mime']
+                    if data.get('remove_image'):
+                        next_image, next_mime = None, ''
+                    if image is not None:
                         next_image, next_mime = store_image(image), image_mime
-                    except ValueError as error:
-                        return self.reply(502, {"error": str(error)})
-                db.execute(
-                    f'UPDATE {table} SET title=?,subject=?,scheduled_date=?,content=?,image=?,image_mime=? WHERE id=?',
-                    (values['title'], values['subject'], values['scheduled_date'], values['content'], next_image, next_mime, post_id)
-                )
-                row = db.execute(f'SELECT id,title,subject,scheduled_date,content,author,created_at,image IS NOT NULL AS has_image FROM {table} WHERE id=?', (post_id,)).fetchone()
-                record_update(db, table)
-            return self.reply(200, {table[:-1]: dict(row)})
-        delete_route = re.fullmatch(r'/api/(assignments|notices)/([1-9][0-9]*)/delete', path)
+                    db.execute(
+                        f'UPDATE {table} SET title=?,subject=?,scheduled_date=?,content=?,image=?,image_mime=? WHERE id=?',
+                        (*values.values(), next_image, next_mime, post_id),
+                    )
+                    for attachment_id in remove_ids:
+                        db.execute('DELETE FROM post_attachments WHERE board=? AND post_id=? AND id=?',
+                                   (table, post_id, attachment_id))
+                    insert_attachments(db, table, post_id, files)
+                    post = self.saved_post(db, table, post_id)
+            except ValueError as error:
+                return self.reply(400, {'error': str(error)})
+            return self.reply(200, {table[:-1]: post})
+        delete_route = re.fullmatch(r'/api/(assignments|notices)/([1-9][0-9]{0,17})/delete', path)
         if delete_route:
             table, post_id = delete_route.groups()
+            post_id = int(post_id)
             with connect() as db:
                 found = db.execute(f'SELECT author FROM {table} WHERE id=?', (post_id,)).fetchone()
                 if not found:
@@ -528,6 +556,7 @@ class Handler(BaseHTTPRequestHandler):
                 if found['author'] != user['id']:
                     return self.reply(403, {'error':'내가 작성한 게시물만 삭제할 수 있어요.'})
                 db.execute(f'DELETE FROM {table} WHERE id=?', (post_id,))
+                db.execute('DELETE FROM post_attachments WHERE board=? AND post_id=?', (table, post_id))
                 record_update(db, table)
             return self.reply(200, {'ok':True})
         if path == '/api/photos':
