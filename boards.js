@@ -616,6 +616,22 @@
       download.setAttribute('download', '');
       caption.append(download);
     }
+    if (app.getUser()?.id === item.author) {
+      const remove = el('button', 'tiny-button', '사진 삭제');
+      remove.type = 'button';
+      remove.onclick = async () => {
+        if (!window.confirm('이 사진을 삭제할까요?')) return;
+        remove.disabled = true;
+        try {
+          await app.api(`photos/${item.id}/delete`, {});
+          if (current === 'photos') renderBoard('photos', '사진을 삭제했어요.');
+        } catch (error) {
+          window.alert(error.message || '사진을 삭제하지 못했어요.');
+          remove.disabled = false;
+        }
+      };
+      caption.append(remove);
+    }
     card.append(image, caption);
     return card;
   }
@@ -627,6 +643,9 @@
       || /\.(jpe?g|jfif|png|webp)$/i.test(file.name);
     // iOS and Android browsers may not decode HEIC or report its MIME type.
     // Let Pillow detect and convert those files on the server.
+    if ((file.type === 'image/gif' || /\.gif$/i.test(file.name)) && file.size > limit) {
+      throw new Error('GIF 움직임을 유지하려면 10MB 이하로 줄인 뒤 올려 주세요.');
+    }
     if (!browserFormat && file.size <= limit) return albumDataURL(file);
 
     let bitmap, imageURL;
@@ -697,7 +716,7 @@
 
   function composePhoto() {
     revision++;
-    page.innerHTML = `<section class="board-form"><button id="compose-back" class="text-button">← 학급앨범으로 돌아가기</button><h1>오늘의 추억을 남겨 보세요 📷</h1><p class="account-lead">여러 장을 골라 함께 올릴 수 있어요.</p><form id="post-form" class="account-card"><label for="photo-file">사진 선택 (여러 장 가능)</label><input id="photo-file" type="file" accept="image/jpeg,image/png,image/webp,image/heic,image/heif,image/avif,image/bmp,image/tiff,.jpg,.jpeg,.jfif,.png,.webp,.heic,.heif,.avif,.bmp,.tif,.tiff" multiple required><p class="photo-upload-note">JPG · PNG · WebP · HEIC/HEIF · AVIF · BMP · TIFF<br>HEIC 같은 모바일 사진은 서버에서 JPG로 바꿔 저장해요. 기기에서 압축할 수 없는 사진은 10MB까지 올릴 수 있어요.<br>기기에서 읽을 수 있는 100MB 이상 사진은 500KB 이하로 압축해요. 10MB 초과 사진은 업로드에 맞게 줄여요.<br>압축하면 화질과 해상도가 낮아지며, 선생님은 저장된 보관본을 다운로드할 수 있어요.</p><p id="selected-photos" role="status"></p><label for="photo-caption">사진에 남길 한마디 (선택, 모든 사진에 적용)</label><textarea id="photo-caption" name="caption" maxlength="140" placeholder="오늘의 추억을 짧게 적어 주세요"></textarea><button type="submit" class="primary-button">사진 올리기</button><p id="post-message" class="form-message" role="status"></p></form></section>`;
+    page.innerHTML = `<section class="board-form"><button id="compose-back" class="text-button">← 학급앨범으로 돌아가기</button><h1>오늘의 추억을 남겨 보세요 📷</h1><p class="account-lead">여러 장을 골라 함께 올릴 수 있어요.</p><form id="post-form" class="account-card"><label for="photo-file">사진 선택 (여러 장 가능)</label><input id="photo-file" type="file" accept="image/*,.heic,.heif,.avif,.tif,.tiff,.ico,.icns,.jp2,.j2k,.mpo,.tga,.ppm,.pcx,.psd,.dds,.qoi" multiple required><p class="photo-upload-note">JPG · PNG · WebP · GIF · HEIC/HEIF · AVIF · BMP · TIFF 등<br>GIF는 보관본에 움직임이 남고 앨범에는 첫 장면이 보여요. HEIC 등 일부 형식은 JPG로 변환해요. 기기에서 압축할 수 없는 사진은 10MB까지 올릴 수 있어요.<br>기기에서 읽을 수 있는 100MB 이상 사진은 500KB 이하로 압축해요. 10MB 초과 사진은 업로드에 맞게 줄여요.<br>압축하면 화질과 해상도가 낮아지며, 선생님은 저장된 보관본을 다운로드할 수 있어요.</p><p id="selected-photos" role="status"></p><label for="photo-caption">사진에 남길 한마디 (선택, 모든 사진에 적용)</label><textarea id="photo-caption" name="caption" maxlength="140" placeholder="오늘의 추억을 짧게 적어 주세요"></textarea><button type="submit" class="primary-button">사진 올리기</button><p id="post-message" class="form-message" role="status"></p></form></section>`;
     const form = document.getElementById('post-form'), message = document.getElementById('post-message');
     const input = document.getElementById('photo-file');
     const back = document.getElementById('compose-back');

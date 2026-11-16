@@ -57,9 +57,9 @@ def prepare_attachments(items):
     return files
 
 
-def prepare_image(raw, *, allow_album_resolution=False):
+def prepare_image(raw):
     with warnings.catch_warnings():
-        warnings.simplefilter('ignore' if allow_album_resolution else 'error', Image.DecompressionBombWarning)
+        warnings.simplefilter('error', Image.DecompressionBombWarning)
         with Image.open(io.BytesIO(raw), formats=list(IMAGE_READERS)) as source:
             ext = FORMATS[source.format]
             if ext == 'gif':

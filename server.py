@@ -27,7 +27,7 @@ from urllib.parse import urlparse, unquote, quote
 
 from database import ROOT, DB, DATABASE_URL, connect, initialize_schema
 from image_storage import store_image, load_image
-from post_attachments import prepare_attachments, prepare_image, insert_attachments, with_attachments
+from post_attachments import prepare_attachments, insert_attachments, with_attachments
 ATTEMPTS = {}
 LOCK = threading.Lock()
 TTL = 30 * 24 * 60 * 60
@@ -93,34 +93,31 @@ def process_photo(encoded):
         raise ValueError('사진 파일을 다시 골라 주세요.')
     if not raw or len(raw)>MAX_PHOTO:
         raise ValueError('사진은 10MB 이하로 골라 주세요.')
-    if not PIL_AVAILABLE:
-        if raw.startswith(b'\xff\xd8\xff'):
-            return raw, raw, 'image/jpeg', 'jpg'
-        if raw.startswith(b'\x89PNG\r\n\x1a\n'):
-            return raw, raw, 'image/png', 'png'
-        if raw.startswith(b'RIFF') and raw[8:12] == b'WEBP':
-            return raw, raw, 'image/webp', 'webp'
-        raise ValueError('JPG, PNG, WebP, HEIC/HEIF, AVIF, BMP 또는 TIFF 사진을 골라 주세요.')
+    formats = {'JPEG': ('image/jpeg', 'jpg'), 'PNG': ('image/png', 'png'),
+               'WEBP': ('image/webp', 'webp'), 'GIF': ('image/gif', 'gif')}
+    readable = [*formats, 'HEIF', 'AVIF', 'BMP', 'TIFF', 'ICO', 'ICNS',
+                'JPEG2000', 'MPO', 'TGA', 'PPM', 'PCX', 'PSD', 'DDS', 'QOI']
     try:
         with warnings.catch_warnings():
             # Pillow still rejects images larger than twice MAX_IMAGE_PIXELS.
-            warnings.simplefilter('ignore',Image.DecompressionBombWarning)
-            with Image.open(io.BytesIO(raw)) as source:
-                formats = {'JPEG':('image/jpeg','jpg'),'PNG':('image/png','png'),'WEBP':('image/webp','webp')}
+            warnings.simplefilter('ignore', Image.DecompressionBombWarning)
+            Image.init()
+            available = [name for name in readable if name in Image.OPEN]
+            with Image.open(io.BytesIO(raw), formats=available) as source:
                 original_format = source.format
                 if original_format in formats:
-                    source.verify()
-                elif original_format not in {'HEIF', 'AVIF', 'BMP', 'TIFF'}:
-                    raise ValueError('JPG, PNG, WebP, HEIC/HEIF, AVIF, BMP 또는 TIFF 사진을 골라 주세요.')
-            if original_format in formats:
-                mime, extension = formats[original_format]
-            else:
-                # Convert mobile formats into a browser-compatible Cloudinary asset.
-                raw, extension = prepare_image(raw, allow_album_resolution=True)
-                mime = 'image/jpeg'
-            with Image.open(io.BytesIO(raw)) as source:
+                    mime, extension = formats[original_format]
+                else:
+                    mime, extension = formats['JPEG']
+                    converted = ImageOps.exif_transpose(source)
+                    converted.thumbnail((2560, 2560))
+                    output = io.BytesIO()
+                    converted.convert('RGB').save(output, 'JPEG', quality=88)
+                    raw = output.getvalue()
+                    if len(raw) > MAX_PHOTO:
+                        raise ValueError('변환된 사진이 10MB를 넘어요.')
                 image = ImageOps.exif_transpose(source)
-                image.thumbnail((640,640))
+                image.thumbnail((640, 640))
                 rgba = image.convert('RGBA')
                 background = Image.new('RGBA',rgba.size,'#faf9f5')
                 background.alpha_composite(rgba)
@@ -423,7 +420,8 @@ class Handler(BaseHTTPRequestHandler):
         if self.headers.get('X-Class-Board') != '1' or (origin and urlparse(origin).netloc != self.headers.get('Host')):
             return self.reply(403,{'error':'허용되지 않은 요청이에요.'})
         token,user = self.session()
-        if path in ('/api/photos','/api/assignments','/api/notices','/api/seats') or re.fullmatch(r'/api/(assignments|notices)/([1-9][0-9]*)/(edit|delete)', path):
+        delete_route = re.fullmatch(r'/api/(assignments|notices|photos)/([1-9][0-9]{0,17})/delete', path)
+        if path in ('/api/photos','/api/assignments','/api/notices','/api/seats') or delete_route or re.fullmatch(r'/api/(assignments|notices)/([1-9][0-9]*)/(edit|delete)', path):
             if not user:
                 return self.reply(401,{'error':'먼저 로그인해 주세요'})
             if user['must_change']:
@@ -558,7 +556,6 @@ class Handler(BaseHTTPRequestHandler):
             except ValueError as error:
                 return self.reply(400, {'error': str(error)})
             return self.reply(200, {table[:-1]: post})
-        delete_route = re.fullmatch(r'/api/(assignments|notices)/([1-9][0-9]{0,17})/delete', path)
         if delete_route:
             table, post_id = delete_route.groups()
             post_id = int(post_id)
@@ -569,7 +566,8 @@ class Handler(BaseHTTPRequestHandler):
                 if found['author'] != user['id']:
                     return self.reply(403, {'error':'내가 작성한 게시물만 삭제할 수 있어요.'})
                 db.execute(f'DELETE FROM {table} WHERE id=?', (post_id,))
-                db.execute('DELETE FROM post_attachments WHERE board=? AND post_id=?', (table, post_id))
+                if table != 'photos':
+                    db.execute('DELETE FROM post_attachments WHERE board=? AND post_id=?', (table, post_id))
                 record_update(db, table)
             return self.reply(200, {'ok':True})
         if path == '/api/photos':
