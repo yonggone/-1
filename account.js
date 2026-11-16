@@ -10,11 +10,12 @@
     const response = await fetch('/api/' + path, data === undefined ? { cache: 'no-store' } : {
       method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Class-Board': '1' }, body: JSON.stringify(data)
     });
-    const result = await response.json();
+    const result = await response.json().catch(() => null);
     if (!response.ok) {
       if (response.status === 401 && path !== 'login') { me = null; loginView(); }
-      throw new Error(result.error || '다시 시도해 주세요.');
+      throw new Error(result?.error || `서버 요청이 실패했어요 (HTTP ${response.status}). 잠시 후 다시 시도해 주세요.`);
     }
+    if (!result) throw new Error('서버 응답을 읽을 수 없어요. 잠시 후 다시 시도해 주세요.');
     return result;
   }
 

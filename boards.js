@@ -610,6 +610,16 @@
     image.draggable = false;
     const caption = el('figcaption');
     caption.append(el('p', 'photo-caption', item.caption || '우리의 작은 순간'), el('p', 'photo-meta', authorText(item.author, item.author_name) + ' · ' + dateText(item.created_at)));
+    const retry = el('button', 'tiny-button', '미리보기 다시 불러오기');
+    retry.type = 'button';
+    retry.hidden = true;
+    image.addEventListener('error', () => { retry.hidden = false; });
+    image.addEventListener('load', () => { retry.hidden = true; });
+    retry.onclick = () => {
+      retry.hidden = true;
+      image.src = `/api/photos/${item.id}/preview?retry=${Date.now()}`;
+    };
+    caption.append(retry);
     if (app.getUser()?.role === 'teacher') {
       const download = el('a', 'download-photo', '↓ 보관본 다운로드');
       download.href = `/api/photos/${item.id}/download`;
@@ -646,7 +656,7 @@
     if ((file.type === 'image/gif' || /\.gif$/i.test(file.name)) && file.size > limit) {
       throw new Error('GIF 움직임을 유지하려면 10MB 이하로 줄인 뒤 올려 주세요.');
     }
-    if (!browserFormat && file.size <= limit) return albumDataURL(file);
+    if (!browserFormat && file.size <= limit) return readAttachment(file);
 
     let bitmap, imageURL;
     try {
@@ -663,13 +673,13 @@
           });
           bitmap = image;
         } catch {
-          if (file.size <= limit) return albumDataURL(file);
+          if (file.size <= limit) return readAttachment(file);
           throw new Error('이 기기에서 이 사진을 압축할 수 없어요. 10MB 이하로 줄이거나 JPG로 내보내 주세요.');
         }
       }
       const width = bitmap.naturalWidth || bitmap.width;
       const height = bitmap.naturalHeight || bitmap.height;
-      if (file.size <= limit && width * height <= 25000000) return albumDataURL(file);
+      if (file.size <= limit && width * height <= 25000000) return readAttachment(file);
       const large = file.size >= 100 * 1024 * 1024;
       const target = large ? 500 * 1024 : 8 * 1024 * 1024;
       const maxSide = large ? 1600 : 4096;
@@ -685,7 +695,7 @@
       for (let attempt = 0; attempt < 18; attempt++) {
         blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/jpeg', Math.max(.45, .9 - attempt * .08)));
         if (!blob) throw new Error('사진 압축에 실패했어요.');
-        if (blob.size <= target) return await albumDataURL(blob);
+        if (blob.size <= target) return await readAttachment(blob, file.name.replace(/\.[^.]+$/, '') + '.jpg');
         if (attempt >= 5) {
           const smaller = document.createElement('canvas');
           smaller.width = Math.max(1, Math.floor(canvas.width * .8));
@@ -705,34 +715,61 @@
     }
   }
 
-  function albumDataURL(file) {
+  function readAttachment(file, name = file.name) {
     return new Promise((resolve, reject) => {
       const reader = new FileReader();
-      reader.onload = () => resolve(reader.result);
-      reader.onerror = () => reject(new Error('사진을 읽지 못했어요.'));
+      reader.onload = () => resolve({name, data: reader.result.split(',')[1]});
+      reader.onerror = reader.onabort = () => reject(new Error(name + ' 파일을 읽지 못했어요.'));
       reader.readAsDataURL(file);
+    });
+  }
+
+  function refreshAttachmentList(list, selected, onRemove = () => {}) {
+    list.replaceChildren();
+    selected.forEach((file, index) => {
+      const row = el('li');
+      row.append(el('span', '', file.name));
+      const remove = el('button', 'text-button danger', '빼기');
+      remove.type = 'button';
+      remove.setAttribute('aria-label', file.name + ' 빼기');
+      remove.onclick = () => {
+        selected.splice(index, 1);
+        refreshAttachmentList(list, selected, onRemove);
+        onRemove();
+      };
+      row.append(remove);
+      list.append(row);
     });
   }
 
   function composePhoto() {
     revision++;
-    page.innerHTML = `<section class="board-form"><button id="compose-back" class="text-button">← 학급앨범으로 돌아가기</button><h1>오늘의 추억을 남겨 보세요 📷</h1><p class="account-lead">여러 장을 골라 함께 올릴 수 있어요.</p><form id="post-form" class="account-card"><label for="photo-file">사진 선택 (여러 장 가능)</label><input id="photo-file" type="file" accept="image/*,.heic,.heif,.avif,.tif,.tiff,.ico,.icns,.jp2,.j2k,.mpo,.tga,.ppm,.pcx,.psd,.dds,.qoi" multiple required><p class="photo-upload-note">JPG · PNG · WebP · GIF · HEIC/HEIF · AVIF · BMP · TIFF 등<br>GIF는 보관본에 움직임이 남고 앨범에는 첫 장면이 보여요. HEIC 등 일부 형식은 JPG로 변환해요. 기기에서 압축할 수 없는 사진은 10MB까지 올릴 수 있어요.<br>기기에서 읽을 수 있는 100MB 이상 사진은 500KB 이하로 압축해요. 10MB 초과 사진은 업로드에 맞게 줄여요.<br>압축하면 화질과 해상도가 낮아지며, 선생님은 저장된 보관본을 다운로드할 수 있어요.</p><p id="selected-photos" role="status"></p><label for="photo-caption">사진에 남길 한마디 (선택, 모든 사진에 적용)</label><textarea id="photo-caption" name="caption" maxlength="140" placeholder="오늘의 추억을 짧게 적어 주세요"></textarea><button type="submit" class="primary-button">사진 올리기</button><p id="post-message" class="form-message" role="status"></p></form></section>`;
+    page.innerHTML = `<section class="board-form"><button id="compose-back" class="text-button">← 학급앨범으로 돌아가기</button><h1>오늘의 추억을 남겨 보세요 📷</h1><p class="account-lead">여러 장을 골라 함께 올릴 수 있어요.</p><form id="post-form" class="account-card"><label for="photo-file">사진 선택 (여러 장 가능)</label><input id="photo-file" type="file" accept="image/*,.heic,.heif,.avif,.tif,.tiff,.ico,.icns,.jp2,.j2k,.mpo,.tga,.ppm,.pcx,.psd,.dds,.qoi" multiple><p class="photo-upload-note">JPG · PNG · WebP · GIF · HEIC/HEIF · AVIF · BMP · TIFF 등<br>GIF는 보관본에 움직임이 남고 앨범에는 첫 장면이 보여요. HEIC 등 일부 형식은 JPG로 변환해요. 기기에서 압축할 수 없는 사진은 10MB까지 올릴 수 있어요.<br>기기에서 읽을 수 있는 100MB 이상 사진은 500KB 이하로 압축해요. 10MB 초과 사진은 업로드에 맞게 줄여요.<br>압축하면 화질과 해상도가 낮아지며, 선생님은 저장된 보관본을 다운로드할 수 있어요.</p><ul id="selected-photos" class="post-file-list" aria-label="추가할 사진"></ul><label for="photo-caption">사진에 남길 한마디 (선택, 모든 사진에 적용)</label><textarea id="photo-caption" name="caption" maxlength="140" placeholder="오늘의 추억을 짧게 적어 주세요"></textarea><button type="submit" class="primary-button">사진 올리기</button><p id="post-message" class="form-message" role="status"></p></form></section>`;
     const form = document.getElementById('post-form'), message = document.getElementById('post-message');
     const input = document.getElementById('photo-file');
     const back = document.getElementById('compose-back');
-    let pending = [], uploading = false;
+    const pending = [];
+    const list = document.getElementById('selected-photos');
+    let uploading = false;
     back.onclick = () => { if (!uploading) { revision++; renderBoard('photos'); } };
     input.onchange = () => {
-      pending = Array.from(input.files);
-      document.getElementById('selected-photos').textContent = `${pending.length}장 선택됨`;
+      pending.push(...input.files);
+      input.value = '';
+      refreshAttachmentList(list, pending, () => { message.textContent = ''; });
       message.textContent = '';
     };
     form.onsubmit = async event => {
       event.preventDefault();
-      if (uploading || !pending.length) return;
+      if (uploading) return;
+      if (!pending.length) {
+        message.textContent = '올릴 사진을 골라 주세요.';
+        return;
+      }
       const button = form.querySelector('[type="submit"]');
       uploading = button.disabled = input.disabled = back.disabled = true;
+      list.querySelectorAll('button').forEach(control => { control.disabled = true; });
       const caption = document.getElementById('photo-caption').value;
+      const version = revision;
       const total = pending.length;
       let completed = 0;
       try {
@@ -740,19 +777,22 @@
         while (pending.length) {
           const file = pending[0];
           message.textContent = `${completed + 1}/${total}장 처리 중: ${file.name}`;
-          const data = await prepareAlbumPhoto(file);
-          await app.api('photos', {caption, image: data.split(',')[1]});
+          const attachment = await prepareAlbumPhoto(file);
+          if (version !== revision) return;
+          await app.api('photos', {caption, attachment});
           pending.shift();
           completed++;
         }
+        if (version !== revision) return;
         revision++;
         renderBoard('photos', `${completed}장의 사진을 올렸어요 📷`);
         window.scrollTo(0, 0);
       } catch (error) {
         message.textContent = `${completed}장 저장됨 · ${pending.length}장 남음. ${error.message || '연결을 확인해 주세요.'} 다시 누르면 남은 사진부터 올려요.`;
-        document.getElementById('selected-photos').textContent = `${pending.length}장 남음`;
+        refreshAttachmentList(list, pending, () => { message.textContent = ''; });
       } finally {
         uploading = button.disabled = input.disabled = back.disabled = false;
+        list.querySelectorAll('button').forEach(control => { control.disabled = false; });
       }
     };
     window.scrollTo(0, 0);
@@ -794,23 +834,6 @@
     if (existing?.has_image) addRemovalOption('기존 첨부 사진', 'legacy');
     for (const file of existing?.attachments || []) addRemovalOption(file.name, file.id);
 
-    function refreshFileList() {
-      list.replaceChildren();
-      selected.forEach((file, index) => {
-        const row = el('li');
-        row.append(el('span', '', file.name));
-        const remove = el('button', 'text-button danger', '빼기');
-        remove.type = 'button';
-        remove.setAttribute('aria-label', file.name + ' 빼기');
-        remove.onclick = () => {
-          selected.splice(index, 1);
-          refreshFileList();
-        };
-        row.append(remove);
-        list.append(row);
-      });
-    }
-
     function validateFiles(files) {
       const retained = stored.querySelectorAll('input:not(:checked)').length;
       if (files.length + retained > 10) throw new Error('기존 파일을 포함해 최대 10개까지 첨부할 수 있어요.');
@@ -828,7 +851,7 @@
         }
         validateFiles([...selected, ...files]);
         selected.push(...files);
-        refreshFileList();
+        refreshAttachmentList(list, selected);
         message.textContent = '';
       } catch (error) {
         message.textContent = error.message;
@@ -854,13 +877,7 @@
         data.remove_attachments = removed.filter(value => value !== 'legacy').map(Number);
         data.attachments = [];
         for (const file of selected) {
-          const encoded = await new Promise((resolve, reject) => {
-            const reader = new FileReader();
-            reader.onload = () => resolve(reader.result.split(',')[1]);
-            reader.onerror = () => reject(new Error(file.name + ' 파일을 읽지 못했어요.'));
-            reader.readAsDataURL(file);
-          });
-          data.attachments.push({name: file.name, data: encoded});
+          data.attachments.push(await readAttachment(file));
         }
         if (version !== revision) return;
         if (editing) await app.api(`${kind}/${existing.id}/edit`, data);

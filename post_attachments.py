@@ -57,11 +57,20 @@ def prepare_attachments(items):
     return files
 
 
-def prepare_image(raw):
+EXTRA_ALBUM_FORMATS = dict.fromkeys(
+    ('ICO', 'ICNS', 'JPEG2000', 'MPO', 'TGA', 'PPM', 'PCX', 'PSD', 'DDS', 'QOI'),
+    'jpg',
+)
+
+
+def prepare_image(raw, *, album=False):
+    formats = {**FORMATS, **EXTRA_ALBUM_FORMATS} if album else FORMATS
+    Image.init()
+    readers = [name for name in formats if name in Image.OPEN]
     with warnings.catch_warnings():
-        warnings.simplefilter('error', Image.DecompressionBombWarning)
-        with Image.open(io.BytesIO(raw), formats=list(IMAGE_READERS)) as source:
-            ext = FORMATS[source.format]
+        warnings.simplefilter('ignore' if album else 'error', Image.DecompressionBombWarning)
+        with Image.open(io.BytesIO(raw), formats=readers) as source:
+            ext = formats[source.format]
             if ext == 'gif':
                 # Keep the original bytes so animated GIFs remain animated.
                 source.verify()
@@ -87,10 +96,9 @@ def prepare_image(raw):
 try:
     from pillow_heif import register_heif_opener
 except ImportError:
-    IMAGE_READERS = FORMATS.keys() - {'HEIF'}
+    pass
 else:
     register_heif_opener()
-    IMAGE_READERS = FORMATS
 
 
 def insert_attachments(db, table, post_id, files):

@@ -2,8 +2,12 @@
 import hashlib
 import io
 import json
+import logging
 import os
+from urllib.error import HTTPError
 from urllib.request import urlopen
+
+logger = logging.getLogger(__name__)
 
 PREFIX = b'CLASSBOARD-CLOUDINARY-v1:'
 
@@ -40,7 +44,8 @@ def store_file(content, *, resource_type='image', extension=''):
         else:
             reference['format'] = result['format']
         return PREFIX + json.dumps(reference, separators=(',', ':')).encode()
-    except Exception:
+    except Exception as error:
+        logger.warning('Cloudinary upload failed: %s', type(error).__name__)
         raise ValueError('외부 사진 저장소에 저장하지 못했어요. 설정과 남은 용량을 확인해 주세요.') from None
 
 
@@ -61,5 +66,7 @@ def load_image(content):
         if len(raw) > 10 * 1024 * 1024:
             raise ValueError('Stored image exceeds transport limit')
         return raw
-    except Exception:
+    except Exception as error:
+        detail = error.code if isinstance(error, HTTPError) else type(error).__name__
+        logger.warning('Cloudinary delivery failed: %s', detail)
         raise ValueError('사진 저장소에서 불러오지 못했어요. 잠시 후 다시 시도해 주세요.') from None

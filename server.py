@@ -27,7 +27,7 @@ from urllib.parse import urlparse, unquote, quote
 
 from database import ROOT, DB, DATABASE_URL, connect, initialize_schema
 from image_storage import store_image, load_image
-from post_attachments import prepare_attachments, insert_attachments, with_attachments
+from post_attachments import prepare_image, prepare_attachments, insert_attachments, with_attachments
 ATTEMPTS = {}
 LOCK = threading.Lock()
 TTL = 30 * 24 * 60 * 60
@@ -84,7 +84,7 @@ def notifications(db, user_id):
 def public(user):
     return {k:user[k] for k in ('id','name','role','birthday','instagram','must_change')}
 
-def process_photo(encoded):
+def process_photo(encoded, *, attachment=False):
     if not isinstance(encoded,str) or len(encoded) > (MAX_PHOTO+2)//3*4:
         raise ValueError('사진은 10MB 이하로 골라 주세요.')
     try:
@@ -93,6 +93,12 @@ def process_photo(encoded):
         raise ValueError('사진 파일을 다시 골라 주세요.')
     if not raw or len(raw)>MAX_PHOTO:
         raise ValueError('사진은 10MB 이하로 골라 주세요.')
+    if attachment:
+        try:
+            raw, extension = prepare_image(raw, album=True)
+        except (OSError, ValueError, SyntaxError, Image.DecompressionBombError,
+                Image.DecompressionBombWarning) as error:
+            raise ValueError('사진을 읽을 수 없거나 해상도가 너무 커요.') from error
     formats = {'JPEG': ('image/jpeg', 'jpg'), 'PNG': ('image/png', 'png'),
                'WEBP': ('image/webp', 'webp'), 'GIF': ('image/gif', 'gif')}
     readable = [*formats, 'HEIF', 'AVIF', 'BMP', 'TIFF', 'ICO', 'ICNS',
@@ -575,7 +581,11 @@ class Handler(BaseHTTPRequestHandler):
             if not isinstance(caption,str) or len(caption)>140:
                 return self.reply(400,{'error':'사진 설명은 140자 이내로 써 주세요.'})
             try:
-                original,preview,mime,extension=process_photo(data.get('image'))
+                attachment = data.get('attachment')
+                if isinstance(attachment, dict):
+                    original, preview, mime, extension = process_photo(attachment.get('data'), attachment=True)
+                else:
+                    original, preview, mime, extension = process_photo(data.get('image'))
                 original, preview = store_image(original), store_image(preview)
             except ValueError as error:
                 return self.reply(400,{'error':str(error)})
