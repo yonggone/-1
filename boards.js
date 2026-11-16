@@ -113,13 +113,34 @@
   }
 
   navigation.querySelectorAll('button').forEach(button => button.onclick = () => navigate(button.dataset.board));
-  document.querySelectorAll('[data-home-board]').forEach(button => button.onclick = () => navigate(button.dataset.homeBoard));
+  document.querySelectorAll('[data-home-board]').forEach(button => {
+    let waking = false;
+    button.onclick = () => {
+      if (!button.classList.contains('cat-class-button')) {
+        navigate(button.dataset.homeBoard);
+        return;
+      }
+      if (waking) return;
+      waking = true;
+      button.classList.add('is-awake');
+      button.setAttribute('aria-busy', 'true');
+      setTimeout(() => {
+        // Another navigation may occur while the short eye-opening pose is visible.
+        if (!document.getElementById('home-page').hidden) navigate('class24');
+        button.classList.remove('is-awake');
+        button.removeAttribute('aria-busy');
+        waking = false;
+      }, 750);
+    };
+  });
 
   function renderResources() {
-    page.innerHTML = `<div class="eyebrow"><span></span>FIND YOUR NEXT IDEA</div>
-      <section class="board-hero"><div><h1>탐구 자료 찾기</h1><p>논문과 책에서 수행평가에 필요한 자료를 찾아보세요.</p></div></section>
+    page.innerHTML = `<section class="research-header">
+      <div class="window-bar">✿ &nbsp; 자료실</div>
+      <div class="research-intro"><div><h1>탐구 자료 찾기</h1><p>수행평가에 필요한 논문과 책을 찾아보세요.</p></div><div class="field-cat"><img src="assets/field-cat.jpg" alt=""></div></div>
+      </section>
       <div class="resource-grid">
-        <section class="resource-card"><a class="resource-link" href="https://www.dbpia.co.kr/" target="_blank" rel="noopener noreferrer"><svg viewBox="0 0 100 110" fill="none" aria-hidden="true"><path d="M22 12h39l18 19v66H22zM61 12v20h18M34 45h32M34 56h32M34 67h18"/><circle cx="64" cy="79" r="12"/><path d="m73 88 13 13"/></svg><strong>논문찾기</strong><span>DBpia에서 논문 찾아보기 ↗</span></a>
+        <section class="resource-card"><a class="resource-link" href="https://www.dbpia.co.kr/" target="_blank" rel="noopener noreferrer"><span class="resource-mascot coffee"><img src="assets/coffee-cat.jpg" alt=""></span><strong>논문찾기</strong><span>DBpia에서 논문 찾아보기 ↗</span></a>
           <div class="resource-account"><h2>천안월봉고등학교 계정</h2><p>DBpia 기관로그인</p>
             <div class="credential-row"><span>ID: <code>cwbhs</code></span><button type="button" data-copy="cwbhs" data-label="아이디">아이디 복사</button></div>
             <div class="credential-row"><span>PW: <code>cwbhs2003</code></span><button type="button" data-copy="cwbhs2003" data-label="비밀번호">비밀번호 복사</button></div>
@@ -127,7 +148,7 @@
             <p class="copy-status" role="status" aria-live="polite"></p>
           </div>
         </section>
-        <section class="resource-card"><a class="resource-link" href="https://read365.edunet.net/PureScreen/SchoolSearch?neisCode=N100002464&amp;provCode=N10&amp;schoolName=천안월봉고등학교" target="_blank" rel="noopener noreferrer"><svg viewBox="0 0 100 110" fill="none" aria-hidden="true"><path d="M50 27C37 16 22 17 10 22v65c14-5 27-3 40 7 13-10 26-12 40-7V22c-12-5-27-6-40 5Zm0 0v67M21 36c7-1 13 1 19 4M21 49c7-1 13 1 19 4M60 40c6-3 12-5 19-4M60 53c6-3 12-5 19-4"/></svg><strong>도서찾기</strong><span>독서로에서 우리 학교 도서 찾아보기 ↗</span></a><p class="resource-note">천안월봉고등학교 도서 검색으로 연결돼요.</p></section>
+        <section class="resource-card"><a class="resource-link" href="https://read365.edunet.net/PureScreen/SchoolSearch?neisCode=N100002464&amp;provCode=N10&amp;schoolName=천안월봉고등학교" target="_blank" rel="noopener noreferrer"><span class="resource-mascot clover"><img src="assets/clover-cat.jpg" alt=""></span><strong>도서찾기</strong><span>독서로에서 우리 학교 도서 찾아보기 ↗</span></a><p class="resource-note">천안월봉고등학교 도서 검색으로 연결돼요.</p></section>
       </div>`;
     page.querySelectorAll('[data-copy]').forEach(button => button.onclick = async () => {
       const status = page.querySelector('.copy-status');
@@ -600,14 +621,24 @@
   }
 
   async function prepareAlbumPhoto(file) {
-    if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type)) {
-      throw new Error('JPG, PNG, WebP 사진을 골라 주세요.');
-    }
+    const limit = 10 * 1024 * 1024;
+    if (!file.size) throw new Error('빈 사진 파일은 올릴 수 없어요.');
+    const browserFormat = ['image/jpeg', 'image/png', 'image/webp'].includes(file.type)
+      || /\.(jpe?g|jfif|png|webp)$/i.test(file.name);
+    // iOS and Android browsers may not decode HEIC or report its MIME type.
+    // Let Pillow detect and convert those files on the server.
+    if (!browserFormat && file.size <= limit) return albumDataURL(file);
+
     let bitmap;
     try {
-      bitmap = await createImageBitmap(file);
-      const needsCompression = file.size > 10 * 1024 * 1024 || bitmap.width * bitmap.height > 25000000;
-      if (!needsCompression) return await albumDataURL(file);
+      try {
+        bitmap = await createImageBitmap(file);
+      } catch {
+        if (file.size <= limit) return albumDataURL(file);
+        throw new Error('이 기기에서 10MB를 넘는 사진을 줄일 수 없어요. 사진을 줄이거나 JPG로 내보내 주세요.');
+      }
+      const needsCompression = file.size > limit || bitmap.width * bitmap.height > 25000000;
+      if (!needsCompression) return albumDataURL(file);
       const target = file.size > 500 * 1024 * 1024 ? 500 * 1024 : 8 * 1024 * 1024;
       const scale = Math.min(1, 4096 / bitmap.width, 4096 / bitmap.height);
       const canvas = document.createElement('canvas');
@@ -651,7 +682,7 @@
 
   function composePhoto() {
     revision++;
-    page.innerHTML = `<section class="board-form"><button id="compose-back" class="text-button">← 학급앨범으로 돌아가기</button><h1>오늘의 추억을 남겨 보세요 📷</h1><p class="account-lead">여러 장을 골라 함께 올릴 수 있어요.</p><form id="post-form" class="account-card"><label for="photo-file">사진 선택 (여러 장 가능)</label><input id="photo-file" type="file" accept="image/jpeg,image/png,image/webp" multiple required><p class="photo-upload-note">JPG · PNG · WebP / 큰 사진은 자동으로 줄여 저장해요.<br>한 장이 500MB를 넘으면 500KB 이하로 압축해요. 10MB 초과 사진은 업로드에 맞게 줄여요.<br>압축하면 화질과 해상도가 낮아지며, 선생님은 저장된 보관본을 다운로드할 수 있어요.</p><p id="selected-photos" role="status"></p><label for="photo-caption">사진에 남길 한마디 (선택, 모든 사진에 적용)</label><textarea id="photo-caption" name="caption" maxlength="140" placeholder="오늘의 추억을 짧게 적어 주세요"></textarea><button type="submit" class="primary-button">사진 올리기</button><p id="post-message" class="form-message" role="status"></p></form></section>`;
+    page.innerHTML = `<section class="board-form"><button id="compose-back" class="text-button">← 학급앨범으로 돌아가기</button><h1>오늘의 추억을 남겨 보세요 📷</h1><p class="account-lead">여러 장을 골라 함께 올릴 수 있어요.</p><form id="post-form" class="account-card"><label for="photo-file">사진 선택 (여러 장 가능)</label><input id="photo-file" type="file" accept="image/jpeg,image/png,image/webp,image/heic,image/heif,image/avif,image/bmp,image/tiff,.jpg,.jpeg,.jfif,.png,.webp,.heic,.heif,.avif,.bmp,.tif,.tiff" multiple required><p class="photo-upload-note">JPG · PNG · WebP · HEIC/HEIF · AVIF · BMP · TIFF<br>HEIC 같은 모바일 사진은 서버에서 JPG로 바꿔 저장해요. 기기에서 압축할 수 없는 사진은 10MB까지 올릴 수 있어요.<br>한 장이 500MB를 넘으면 500KB 이하로 압축해요. 10MB 초과 사진은 업로드에 맞게 줄여요.<br>압축하면 화질과 해상도가 낮아지며, 선생님은 저장된 보관본을 다운로드할 수 있어요.</p><p id="selected-photos" role="status"></p><label for="photo-caption">사진에 남길 한마디 (선택, 모든 사진에 적용)</label><textarea id="photo-caption" name="caption" maxlength="140" placeholder="오늘의 추억을 짧게 적어 주세요"></textarea><button type="submit" class="primary-button">사진 올리기</button><p id="post-message" class="form-message" role="status"></p></form></section>`;
     const form = document.getElementById('post-form'), message = document.getElementById('post-message');
     const input = document.getElementById('photo-file');
     const back = document.getElementById('compose-back');

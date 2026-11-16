@@ -27,7 +27,7 @@ from urllib.parse import urlparse, unquote, quote
 
 from database import ROOT, DB, DATABASE_URL, connect, initialize_schema
 from image_storage import store_image, load_image
-from post_attachments import prepare_attachments, insert_attachments, with_attachments
+from post_attachments import prepare_attachments, prepare_image, insert_attachments, with_attachments
 ATTEMPTS = {}
 LOCK = threading.Lock()
 TTL = 30 * 24 * 60 * 60
@@ -100,16 +100,23 @@ def process_photo(encoded):
             return raw, raw, 'image/png', 'png'
         if raw.startswith(b'RIFF') and raw[8:12] == b'WEBP':
             return raw, raw, 'image/webp', 'webp'
-        raise ValueError('JPG, PNG, WebP 사진만 올릴 수 있어요.')
+        raise ValueError('JPG, PNG, WebP, HEIC/HEIF, AVIF, BMP 또는 TIFF 사진을 골라 주세요.')
     try:
         with warnings.catch_warnings():
             warnings.simplefilter('error',Image.DecompressionBombWarning)
             with Image.open(io.BytesIO(raw)) as source:
                 formats = {'JPEG':('image/jpeg','jpg'),'PNG':('image/png','png'),'WEBP':('image/webp','webp')}
-                if source.format not in formats:
-                    raise ValueError('JPG, PNG, WebP 사진만 올릴 수 있어요.')
-                mime,extension = formats[source.format]
-                source.verify()
+                original_format = source.format
+                if original_format in formats:
+                    source.verify()
+                elif original_format not in {'HEIF', 'AVIF', 'BMP', 'TIFF'}:
+                    raise ValueError('JPG, PNG, WebP, HEIC/HEIF, AVIF, BMP 또는 TIFF 사진을 골라 주세요.')
+            if original_format in formats:
+                mime, extension = formats[original_format]
+            else:
+                # Convert mobile formats into a browser-compatible Cloudinary asset.
+                raw, extension = prepare_image(raw)
+                mime = 'image/jpeg'
             with Image.open(io.BytesIO(raw)) as source:
                 image = ImageOps.exif_transpose(source)
                 image.thumbnail((640,640))
@@ -379,7 +386,7 @@ class Handler(BaseHTTPRequestHandler):
                     seats = db.execute('SELECT slot,student_id FROM seat_layout ORDER BY slot').fetchall()
                 return self.reply(200, {'seats': [dict(row) for row in seats], 'revision': snapshot})
             return self.reply(404,{'error':'찾을 수 없는 요청이에요.'})
-        files = {'/':'index.html', **{'/'+f:f for f in ['index.html','app.js','style.css','account.js','account.css','boards.js','boards.css','chalkboard.css']}}
+        files = {'/':'index.html', **{'/'+f:f for f in ['index.html','app.js','style.css','account.js','account.css','boards.js','boards.css','chalkboard.css','clover.css']}}
         # Serve only the theme assets explicitly bundled with the app.
         assets = {
             '/assets/cork-grain.svg': ('assets/cork-grain.svg', 'image/svg+xml'),
@@ -387,6 +394,11 @@ class Handler(BaseHTTPRequestHandler):
             '/assets/fonts/GowunDodum-Regular.woff2': ('assets/fonts/GowunDodum-Regular.woff2', 'font/woff2'),
             '/assets/fonts/GamjaFlower-Regular.woff2': ('assets/fonts/GamjaFlower-Regular.woff2', 'font/woff2'),
         }
+        for filename in ('field-cat.jpg', 'cat-stamp.jpg', 'cat-note.jpg', 'clover-cat.jpg', 'coffee-cat.jpg'):
+            assets['/assets/' + filename] = ('assets/' + filename, 'image/jpeg')
+        assets['/assets/fonts/ParkDahyun.ttf'] = ('assets/fonts/ParkDahyun.ttf', 'font/ttf')
+        for filename in ('class-cat-sprite.png', 'cat-fourcuts.png'):
+            assets['/assets/' + filename] = ('assets/' + filename, 'image/png')
         if path in assets:
             filename, mime = assets[path]
             return self.binary((ROOT / filename).read_bytes(), mime)
