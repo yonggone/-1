@@ -629,21 +629,35 @@
     // Let Pillow detect and convert those files on the server.
     if (!browserFormat && file.size <= limit) return albumDataURL(file);
 
-    let bitmap;
+    let bitmap, imageURL;
     try {
       try {
         bitmap = await createImageBitmap(file);
       } catch {
-        if (file.size <= limit) return albumDataURL(file);
-        throw new Error('이 기기에서 10MB를 넘는 사진을 줄일 수 없어요. 사진을 줄이거나 JPG로 내보내 주세요.');
+        imageURL = URL.createObjectURL(file);
+        const image = new Image();
+        try {
+          await new Promise((resolve, reject) => {
+            image.onload = resolve;
+            image.onerror = reject;
+            image.src = imageURL;
+          });
+          bitmap = image;
+        } catch {
+          if (file.size <= limit) return albumDataURL(file);
+          throw new Error('이 기기에서 이 사진을 압축할 수 없어요. 10MB 이하로 줄이거나 JPG로 내보내 주세요.');
+        }
       }
-      const needsCompression = file.size > limit || bitmap.width * bitmap.height > 25000000;
-      if (!needsCompression) return albumDataURL(file);
-      const target = file.size > 500 * 1024 * 1024 ? 500 * 1024 : 8 * 1024 * 1024;
-      const scale = Math.min(1, 4096 / bitmap.width, 4096 / bitmap.height);
+      const width = bitmap.naturalWidth || bitmap.width;
+      const height = bitmap.naturalHeight || bitmap.height;
+      if (file.size <= limit && width * height <= 25000000) return albumDataURL(file);
+      const large = file.size >= 100 * 1024 * 1024;
+      const target = large ? 500 * 1024 : 8 * 1024 * 1024;
+      const maxSide = large ? 1600 : 4096;
+      const scale = Math.min(1, maxSide / width, maxSide / height);
       const canvas = document.createElement('canvas');
-      canvas.width = Math.max(1, Math.round(bitmap.width * scale));
-      canvas.height = Math.max(1, Math.round(bitmap.height * scale));
+      canvas.width = Math.max(1, Math.round(width * scale));
+      canvas.height = Math.max(1, Math.round(height * scale));
       const context = canvas.getContext('2d');
       context.fillStyle = '#ffffff';
       context.fillRect(0, 0, canvas.width, canvas.height);
@@ -667,7 +681,8 @@
     } catch (error) {
       throw new Error(error.message || '사진을 읽지 못했어요. 기기에서 사진 크기를 줄인 뒤 다시 시도해 주세요.');
     } finally {
-      bitmap?.close();
+      bitmap?.close?.();
+      if (imageURL) URL.revokeObjectURL(imageURL);
     }
   }
 
@@ -682,7 +697,7 @@
 
   function composePhoto() {
     revision++;
-    page.innerHTML = `<section class="board-form"><button id="compose-back" class="text-button">← 학급앨범으로 돌아가기</button><h1>오늘의 추억을 남겨 보세요 📷</h1><p class="account-lead">여러 장을 골라 함께 올릴 수 있어요.</p><form id="post-form" class="account-card"><label for="photo-file">사진 선택 (여러 장 가능)</label><input id="photo-file" type="file" accept="image/jpeg,image/png,image/webp,image/heic,image/heif,image/avif,image/bmp,image/tiff,.jpg,.jpeg,.jfif,.png,.webp,.heic,.heif,.avif,.bmp,.tif,.tiff" multiple required><p class="photo-upload-note">JPG · PNG · WebP · HEIC/HEIF · AVIF · BMP · TIFF<br>HEIC 같은 모바일 사진은 서버에서 JPG로 바꿔 저장해요. 기기에서 압축할 수 없는 사진은 10MB까지 올릴 수 있어요.<br>한 장이 500MB를 넘으면 500KB 이하로 압축해요. 10MB 초과 사진은 업로드에 맞게 줄여요.<br>압축하면 화질과 해상도가 낮아지며, 선생님은 저장된 보관본을 다운로드할 수 있어요.</p><p id="selected-photos" role="status"></p><label for="photo-caption">사진에 남길 한마디 (선택, 모든 사진에 적용)</label><textarea id="photo-caption" name="caption" maxlength="140" placeholder="오늘의 추억을 짧게 적어 주세요"></textarea><button type="submit" class="primary-button">사진 올리기</button><p id="post-message" class="form-message" role="status"></p></form></section>`;
+    page.innerHTML = `<section class="board-form"><button id="compose-back" class="text-button">← 학급앨범으로 돌아가기</button><h1>오늘의 추억을 남겨 보세요 📷</h1><p class="account-lead">여러 장을 골라 함께 올릴 수 있어요.</p><form id="post-form" class="account-card"><label for="photo-file">사진 선택 (여러 장 가능)</label><input id="photo-file" type="file" accept="image/jpeg,image/png,image/webp,image/heic,image/heif,image/avif,image/bmp,image/tiff,.jpg,.jpeg,.jfif,.png,.webp,.heic,.heif,.avif,.bmp,.tif,.tiff" multiple required><p class="photo-upload-note">JPG · PNG · WebP · HEIC/HEIF · AVIF · BMP · TIFF<br>HEIC 같은 모바일 사진은 서버에서 JPG로 바꿔 저장해요. 기기에서 압축할 수 없는 사진은 10MB까지 올릴 수 있어요.<br>기기에서 읽을 수 있는 100MB 이상 사진은 500KB 이하로 압축해요. 10MB 초과 사진은 업로드에 맞게 줄여요.<br>압축하면 화질과 해상도가 낮아지며, 선생님은 저장된 보관본을 다운로드할 수 있어요.</p><p id="selected-photos" role="status"></p><label for="photo-caption">사진에 남길 한마디 (선택, 모든 사진에 적용)</label><textarea id="photo-caption" name="caption" maxlength="140" placeholder="오늘의 추억을 짧게 적어 주세요"></textarea><button type="submit" class="primary-button">사진 올리기</button><p id="post-message" class="form-message" role="status"></p></form></section>`;
     const form = document.getElementById('post-form'), message = document.getElementById('post-message');
     const input = document.getElementById('photo-file');
     const back = document.getElementById('compose-back');

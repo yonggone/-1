@@ -103,7 +103,8 @@ def process_photo(encoded):
         raise ValueError('JPG, PNG, WebP, HEIC/HEIF, AVIF, BMP 또는 TIFF 사진을 골라 주세요.')
     try:
         with warnings.catch_warnings():
-            warnings.simplefilter('error',Image.DecompressionBombWarning)
+            # Pillow still rejects images larger than twice MAX_IMAGE_PIXELS.
+            warnings.simplefilter('ignore',Image.DecompressionBombWarning)
             with Image.open(io.BytesIO(raw)) as source:
                 formats = {'JPEG':('image/jpeg','jpg'),'PNG':('image/png','png'),'WEBP':('image/webp','webp')}
                 original_format = source.format
@@ -115,7 +116,7 @@ def process_photo(encoded):
                 mime, extension = formats[original_format]
             else:
                 # Convert mobile formats into a browser-compatible Cloudinary asset.
-                raw, extension = prepare_image(raw)
+                raw, extension = prepare_image(raw, allow_album_resolution=True)
                 mime = 'image/jpeg'
             with Image.open(io.BytesIO(raw)) as source:
                 image = ImageOps.exif_transpose(source)
