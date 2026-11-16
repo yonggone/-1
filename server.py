@@ -441,6 +441,26 @@ class Handler(BaseHTTPRequestHandler):
                 raise ValueError()
         except (ValueError,UnicodeError):
             return self.reply(400,{'error':'입력 내용을 다시 확인해 주세요.'})
+        if path == '/api/password-reset':
+            if not user:
+                return self.reply(401, {'error': '먼저 로그인해 주세요.'})
+            if user['id'] != '20431' or user['must_change']:
+                return self.reply(403, {'error': '비밀번호를 재설정할 권한이 없어요.'})
+            target, current = data.get('id'), data.get('current')
+            if not isinstance(target, str) or not re.fullmatch(r'204[0-9]{2}', target) or target == user['id']:
+                return self.reply(400, {'error': '다른 학생의 학번을 확인해 주세요.'})
+            if not isinstance(current, str) or not 1 <= len(current) <= 128 or not verify(current, user['password']):
+                return self.reply(403, {'error': '내 비밀번호가 일치하지 않아요.'})
+            temporary = secrets.token_urlsafe(12)
+            with connect() as db:
+                updated = db.execute(
+                    "UPDATE users SET password=?, must_change=1 WHERE id=? AND role='student' RETURNING id",
+                    (hash_password(temporary), target),
+                ).fetchone()
+                if not updated:
+                    return self.reply(404, {'error': '해당 학생 계정을 찾을 수 없어요.'})
+                db.execute('DELETE FROM sessions WHERE user_id=?', (target,))
+            return self.reply(200, {'temporary_password': temporary})
         if path == '/api/profile-name':
             if not user:
                 return self.reply(401, {'error':'먼저 로그인해 주세요.'})

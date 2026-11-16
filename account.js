@@ -350,6 +350,29 @@
       };
       dialog.append(edit, form);
     }
+    if (me?.id === '20431' && profile.role === 'student' && profile.id !== me.id) {
+      const reset = document.createElement('details');
+      reset.innerHTML = '<summary>비밀번호 재설정</summary><form><label>내 비밀번호 <input name="current" type="password" autocomplete="current-password" maxlength="128" required></label><button type="submit">임시 비밀번호 발급</button><p role="status"></p></form>';
+      const form = reset.querySelector('form');
+      const status = form.querySelector('[role="status"]');
+      const button = form.querySelector('button');
+      form.onsubmit = async event => {
+        event.preventDefault();
+        if (!window.confirm(profile.id + ' 학생의 비밀번호를 재설정할까요?')) return;
+        button.disabled = true;
+        status.textContent = '';
+        try {
+          const result = await api('password-reset', {id: profile.id, current: form.elements.current.value});
+          status.textContent = '임시 비밀번호: ' + result.temporary_password + ' · 학생에게 개인적으로 알려 주세요.';
+        } catch (error) {
+          status.textContent = error.message;
+        } finally {
+          form.reset();
+          button.disabled = false;
+        }
+      };
+      dialog.append(reset);
+    }
     dialog.addEventListener('click', event => {
       if (event.target !== dialog) return;
       const box = dialog.getBoundingClientRect();
